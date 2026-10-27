@@ -88,17 +88,24 @@ jobs:
             return 1
           )
           # Positive self-tests: planted ASCII / UTF-16LE (odd offset) / UTF-16BE samples must be detected.
-          printf 'x.ts.net' > st_a; printf 'Zx.ts.net' | iconv -f UTF-8 -t UTF-16LE > st_l; printf 'fd7a:115c:a1e0:1' | iconv -f UTF-8 -t UTF-16BE > st_b
-          for t in st_a st_l st_b; do scan "$t" || { echo "::error::leak scanner self-test failed ($t)"; exit 1; }; done
-          rm -f st_a st_l st_b
-          HITS=0; FILES=0
+          printf 'x.ts.net' > st_a
+          printf 'Zx.ts.net' | iconv -f UTF-8 -t UTF-16LE > st_l
+          printf 'fd7a:115c:a1e0:1' | iconv -f UTF-8 -t UTF-16BE > st_b
+          { printf 'Q'; printf 'x.ts.net' | iconv -f UTF-8 -t UTF-16LE; } > st_lo   # 1-byte shifted LE
+          { printf 'Q'; printf 'x.ts.net' | iconv -f UTF-8 -t UTF-16BE; } > st_bo   # 1-byte shifted BE
+          for t in st_a st_l st_b st_lo st_bo; do scan "$t" || { echo "::error::leak scanner self-test failed ($t)"; exit 1; }; done
+          rm -f st_a st_l st_b st_lo st_bo
+          HITS=0; FILES=0; SAW_PLIST=0; SAW_EXE=0
           while IFS= read -r -d '' f; do
             FILES=$((FILES+1))
+            [ "$f" = "ipa_x/Payload/Eve.app/Info.plist" ] && SAW_PLIST=1
+            [ "$f" = "ipa_x/Payload/Eve.app/Eve" ] && SAW_EXE=1
             if scan "$f"; then HITS=$((HITS+1)); fi
           done < <(find ipa_x -type f -print0)
           rm -rf ipa_x
           echo "scanned files: $FILES; files with forbidden address patterns: $HITS"
           [ "$FILES" -gt 0 ] || { echo "::error::no files scanned"; exit 1; }
+          [ "$SAW_PLIST" -eq 1 ] && [ "$SAW_EXE" -eq 1 ] || { echo "::error::Info.plist or main executable not scanned"; exit 1; }
           [ "$HITS" -eq 0 ] || { echo "::error::IPA contains a forbidden address pattern ($HITS files)"; exit 1; }
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
