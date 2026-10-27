@@ -1,0 +1,108 @@
+name: build-ipa
+# Security review: push to main + manual dispatch only (run on main or a shell-v* tag).
+# No PR triggers, no secrets, no signing material.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  XCODEGEN_VERSION: "2.46.0"
+  XCODEGEN_SHA256: "4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806"
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/shell-v')
+    # macos-26 image; if unavailable, fall back to macos-15 with an Xcode 26.x install.
+    runs-on: macos-26
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Select Xcode 26.x
+        run: |
+          XC=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)
+          echo "Using $XC"
+          sudo xcode-select -s "$XC/Contents/Developer"
+          xcodebuild -version
+
+      - name: Install pinned XcodeGen (release zip + sha256)
+        run: |
+          curl -fsSL -o xcodegen.zip "https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip"
+          echo "${XCODEGEN_SHA256}  xcodegen.zip" | shasum -a 256 -c -
+          unzip -q xcodegen.zip -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
+          rm xcodegen.zip
+
+      - name: Generate project (placeholder host, no real address)
+        run: |
+          cp Config/Local.xcconfig.example Config/Local.xcconfig
+          sed -i '' 's/^EVE_HOST = .*/EVE_HOST = eve.example.invalid/' Config/Local.xcconfig
+          grep -q '^EVE_HOST = eve.example.invalid$' Config/Local.xcconfig || { echo "::error::placeholder substitution failed"; exit 1; }
+          xcodegen --version
+          xcodegen generate
+
+      - name: Build unsigned (iphoneos)
+        run: |
+          set -o pipefail
+          xcodebuild -project Eve.xcodeproj -scheme Eve -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM="" \
+            build | tail -n 200
+
+      - name: Package Eve.ipa
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/Eve.app Payload/
+          zip -qry Eve.ipa Payload
+          SHA=$(shasum -a 256 Eve.ipa | cut -d' ' -f1)
+          echo "Eve.ipa sha256: $SHA"
+          echo "### Eve.ipa (unsigned)" >> "$GITHUB_STEP_SUMMARY"
+          echo "sha256: \`$SHA\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Leak check (counts only, never prints matches)
+        run: |
+          PAT='\.ts\.net|(^|[^0-9])100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]+\.[0-9]+|fd7a:115c:a1e0:'
+          rm -rf ipa_x && mkdir ipa_x && unzip -q Eve.ipa -d ipa_x
+          HITS=0
+          while IFS= read -r -d '' f; do
+            if { strings -a "$f"; strings -a -e l "$f"; } 2>/dev/null | grep -Eiq "$PAT"; then
+              HITS=$((HITS+1))
+            fi
+          done < <(find ipa_x -type f -print0)
+          rm -rf ipa_x
+          echo "files with forbidden address patterns: $HITS"
+          [ "$HITS" -eq 0 ] || { echo "::error::IPA contains a forbidden address pattern ($HITS files)"; exit 1; }
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Eve-unsigned-ipa
+          path: Eve.ipa
+          retention-days: 3
+          if-no-files-found: error
+
+  attest:
+    needs: build
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/shell-v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: Eve-unsigned-ipa
+      - run: shasum -a 256 Eve.ipa
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: Eve.ipa
