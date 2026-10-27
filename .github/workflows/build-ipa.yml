@@ -68,18 +68,37 @@ jobs:
           echo "### Eve.ipa (unsigned)" >> "$GITHUB_STEP_SUMMARY"
           echo "sha256: \`$SHA\`" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Leak check (counts only, never prints matches)
+      - name: Leak check (counts only, never prints matches; ASCII + UTF-16LE/BE via iconv)
         run: |
+          set -euo pipefail
           PAT='\.ts\.net|(^|[^0-9])100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]+\.[0-9]+|fd7a:115c:a1e0:'
+          # Self-test: iconv must decode UTF-16LE, otherwise fail rather than silently skip.
+          printf 'a.ts.net' | iconv -f UTF-8 -t UTF-16LE | iconv -f UTF-16LE -t UTF-8 | grep -Eq "$PAT" \
+            || { echo "::error::UTF-16 scan unsupported (iconv self-test failed)"; exit 1; }
           rm -rf ipa_x && mkdir ipa_x && unzip -q Eve.ipa -d ipa_x
-          HITS=0
+          scan() (  # $1 file; returns 0 if a forbidden pattern is found (subshell: no pipefail, grep -q may SIGPIPE upstream)
+            set +e +o pipefail
+            LC_ALL=C tr -c '[:print:]' '\n' < "$1" | grep -Eiq "$PAT" && return 0
+            for enc in UTF-16LE UTF-16BE; do
+              for off in 1 2; do
+                tail -c +"$off" "$1" | iconv -c -f "$enc" -t UTF-8 2>/dev/null \
+                  | LC_ALL=C tr -c '[:print:]' '\n' | grep -Eiq "$PAT" && return 0
+              done
+            done
+            return 1
+          )
+          # Positive self-tests: planted ASCII / UTF-16LE (odd offset) / UTF-16BE samples must be detected.
+          printf 'x.ts.net' > st_a; printf 'Zx.ts.net' | iconv -f UTF-8 -t UTF-16LE > st_l; printf 'fd7a:115c:a1e0:1' | iconv -f UTF-8 -t UTF-16BE > st_b
+          for t in st_a st_l st_b; do scan "$t" || { echo "::error::leak scanner self-test failed ($t)"; exit 1; }; done
+          rm -f st_a st_l st_b
+          HITS=0; FILES=0
           while IFS= read -r -d '' f; do
-            if { strings -a "$f"; strings -a -e l "$f"; } 2>/dev/null | grep -Eiq "$PAT"; then
-              HITS=$((HITS+1))
-            fi
+            FILES=$((FILES+1))
+            if scan "$f"; then HITS=$((HITS+1)); fi
           done < <(find ipa_x -type f -print0)
           rm -rf ipa_x
-          echo "files with forbidden address patterns: $HITS"
+          echo "scanned files: $FILES; files with forbidden address patterns: $HITS"
+          [ "$FILES" -gt 0 ] || { echo "::error::no files scanned"; exit 1; }
           [ "$HITS" -eq 0 ] || { echo "::error::IPA contains a forbidden address pattern ($HITS files)"; exit 1; }
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
