@@ -1,0 +1,73 @@
+name: build-ipa
+# Security review: push to main + manual dispatch only. No PR triggers, no secrets, no signing.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # macos-26 image; if unavailable, fall back to macos-15 with an Xcode 26.x install.
+    runs-on: macos-26
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write      # only for attest-build-provenance
+      attestations: write  # only for attest-build-provenance
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Select Xcode 26.x
+        run: |
+          XC=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)
+          echo "Using $XC"
+          sudo xcode-select -s "$XC/Contents/Developer"
+          xcodebuild -version
+
+      - name: Generate project (placeholder host, no real address)
+        run: |
+          brew install xcodegen
+          cp Config/Local.xcconfig.example Config/Local.xcconfig
+          sed -i '' 's/^EVE_HOST = .*/EVE_HOST = eve.example.invalid/' Config/Local.xcconfig
+          xcodegen generate
+
+      - name: Build unsigned (iphoneos)
+        run: |
+          set -o pipefail
+          xcodebuild -project Eve.xcodeproj -scheme Eve -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM="" \
+            build | tail -n 200
+
+      - name: Package Eve.ipa
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/Eve.app Payload/
+          zip -qry Eve.ipa Payload
+          SHA=$(shasum -a 256 Eve.ipa | cut -d' ' -f1)
+          echo "Eve.ipa sha256: $SHA"
+          echo "### Eve.ipa (unsigned)" >> "$GITHUB_STEP_SUMMARY"
+          echo "sha256: \`$SHA\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check IPA for real addresses
+        run: |
+          if unzip -p Eve.ipa | strings | grep -Ei '\.ts\.net|(^|[^0-9])100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]+\.[0-9]+'; then
+            echo "::error::IPA contains a tailnet address"; exit 1
+          fi
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: Eve.ipa
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Eve-unsigned-ipa
+          path: Eve.ipa
+          retention-days: 3
+          if-no-files-found: error

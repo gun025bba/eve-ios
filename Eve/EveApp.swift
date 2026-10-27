@@ -1,0 +1,52 @@
+import SwiftUI
+
+@main
+struct EveApp: App {
+    var body: some Scene {
+        WindowGroup {
+            ShellView()
+        }
+    }
+}
+
+struct ShellView: View {
+    @StateObject private var model = ShellModel()
+
+    var body: some View {
+        ZStack {
+            Color(uiColor: .systemBackground).ignoresSafeArea()
+            WebViewContainer(model: model)
+                .ignoresSafeArea()
+            if model.offline {
+                OfflineView(retry: model.reload, unpair: { model.showUnpairConfirm = true })
+            }
+        }
+        .ignoresSafeArea()
+        // Shell settings: three-finger long press opens the unpair dialog.
+        .confirmationDialog("Eve shell \(ShellConfig.shellVersion)", isPresented: $model.showUnpairConfirm) {
+            Button("Unpair this device", role: .destructive) { model.unpair() }
+            Button("Reload") { model.reload() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Unpair signs out and deletes all cookies and website data stored by this app.")
+        }
+    }
+}
+
+struct OfflineView: View {
+    let retry: () -> Void
+    let unpair: () -> Void
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "network.slash").font(.system(size: 44))
+            Text("Tailscale 연결 확인").font(.title2.bold())
+            Text("Eve 서버에 연결할 수 없습니다. Tailscale이 켜져 있고 tailnet에 연결되어 있는지 확인하세요.")
+                .multilineTextAlignment(.center).foregroundStyle(.secondary)
+            Button("다시 시도", action: retry).buttonStyle(.borderedProminent)
+            Button("Unpair", role: .destructive, action: unpair).font(.footnote)
+        }
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(uiColor: .systemBackground))
+    }
+}
