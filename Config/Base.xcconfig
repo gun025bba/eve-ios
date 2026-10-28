@@ -1,0 +1,7 @@
+// Committed defaults. Real values go in Config/Local.xcconfig (gitignored).
+EVE_HOST = eve.example.invalid
+EVE_START_PATH = /ui/
+EVE_BUNDLE_ID = com.example.eve
+EVE_SHELL_VERSION = 0.1.0
+EVE_BUILD_NUMBER = 1
+#include? "Local.xcconfig"

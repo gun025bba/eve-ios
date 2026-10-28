@@ -1,0 +1,36 @@
+name: Eve
+options:
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+configFiles:
+  Debug: Config/Base.xcconfig
+  Release: Config/Base.xcconfig
+targets:
+  Eve:
+    type: application
+    platform: iOS
+    sources: [Eve]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(EVE_BUNDLE_ID)
+        MARKETING_VERSION: $(EVE_SHELL_VERSION)
+        CURRENT_PROJECT_VERSION: $(EVE_BUILD_NUMBER)
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: NO
+    info:
+      path: Eve/Info.plist
+      properties:
+        CFBundleDisplayName: Eve
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        EveHost: $(EVE_HOST)
+        EveStartPath: $(EVE_START_PATH)
+        UILaunchScreen: {}
+        UIStatusBarStyle: UIStatusBarStyleDefault
+        UIViewControllerBasedStatusBarAppearance: false
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
