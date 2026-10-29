@@ -11,6 +11,7 @@ struct EveApp: App {
 
 struct ShellView: View {
     @StateObject private var model = ShellModel()
+    @ObservedObject private var revoker = SessionRevoker.shared
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -23,6 +24,7 @@ struct ShellView: View {
             }
         }
         .ignoresSafeArea()
+        .overlay(alignment: .bottom) { RevokeBanner(state: revoker.state, dismiss: revoker.dismissFailure) }
         // L1: retry a pending server-side session revoke at launch, on foreground and when the network returns.
         .task { SessionRevoker.shared.start() }
         .onChange(of: scenePhase) { _, phase in
@@ -54,5 +56,32 @@ struct OfflineView: View {
         .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(uiColor: .systemBackground))
+    }
+}
+
+/// Shows the state of a server-side session revoke after unpair (never silently pending or failed).
+struct RevokeBanner: View {
+    let state: RevokeState
+    let dismiss: () -> Void
+    var body: some View {
+        switch state {
+        case .none:
+            EmptyView()
+        case .pending:
+            banner("서버 세션 해지 대기 중 · 연결되면 자동으로 다시 시도해요.")
+        case .failed:
+            banner("서버 세션 해지 실패 · 관리자에서 세션을 해지해 주세요. (탭하면 닫기)")
+                .onTapGesture(perform: dismiss)
+        }
+    }
+    private func banner(_ text: String) -> some View {
+        Text(text)
+            .font(.footnote)
+            .multilineTextAlignment(.center)
+            .padding(10)
+            .frame(maxWidth: .infinity)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+            .padding(.horizontal, 16)
+            .padding(.bottom, 40)
     }
 }

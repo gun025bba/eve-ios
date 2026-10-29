@@ -27,9 +27,10 @@ final class ShellModel: ObservableObject {
         let store = WKWebsiteDataStore.default()
         let revoker = SessionRevoker.shared
         let token = await revoker.currentSessionToken(from: store.httpCookieStore)
-        if let token { revoker.persistPending(token) }
+        var persisted = false
+        if let token { persisted = revoker.persistPending(token) }
         await store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast)
         reload()
-        if let token { await revoker.revoke(token: token) }
+        if let token { await revoker.revoke(token: token, persisted: persisted) }
     }
 }

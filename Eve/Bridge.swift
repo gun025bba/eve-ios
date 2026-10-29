@@ -81,7 +81,8 @@ final class Bridge: NSObject, WKScriptMessageHandler {
                 let o = frame.securityOrigin
                 guard frame.isMainFrame,
                       self.config.isAllowed(origin: (o.protocol, o.host, o.port)),
-                      generation == self.documentGeneration else { return }
+                      generation == self.documentGeneration,
+                      let furl = frame.request.url, self.config.isAllowed(url: furl) else { return }
             }
             guard let url = wv.url, self.config.isAllowed(url: url) else { return }
             wv.callAsyncJavaScript(

@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: compile-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 env:
   XCODEGEN_VERSION: "2.46.0"
   XCODEGEN_SHA256: "4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806"
@@ -23,6 +27,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Source leak check (counts only, never prints matches)
+        run: |
+          set -euo pipefail
+          PAT='\.ts\.net|(^|[^0-9])100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]+\.[0-9]+|fd7a:115c:a1e0:'
+          if git grep -qIE "$PAT" -- . ':!.github/workflows'; then
+            echo "::error::tracked files contain a forbidden address pattern (matches not printed)"; exit 1
+          fi
+          echo "no forbidden address patterns in tracked files"
 
       - name: Select Xcode 26.x
         run: |
