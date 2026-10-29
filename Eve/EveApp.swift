@@ -2,6 +2,8 @@ import SwiftUI
 
 @main
 struct EveApp: App {
+    init() { NotificationManager.shared.configure() }
+
     var body: some Scene {
         WindowGroup {
             ShellView()
@@ -28,7 +30,10 @@ struct ShellView: View {
         // L1: retry a pending server-side session revoke at launch, on foreground and when the network returns.
         .task { SessionRevoker.shared.start() }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { Task { await SessionRevoker.shared.retryPending() } }
+            if phase == .active {
+                NotificationManager.shared.clearDelivered()
+                Task { await SessionRevoker.shared.retryPending() }
+            }
         }
         // Shell settings: three-finger long press opens the unpair dialog.
         .confirmationDialog("Eve shell \(ShellConfig.shellVersion)", isPresented: $model.showUnpairConfirm) {

@@ -8,7 +8,7 @@ import UIKit
 /// frame is still the same main-frame document on the configured origin.
 final class Bridge: NSObject, WKScriptMessageHandler {
     static let handlerName = "eve"
-    static let features = ["haptics", "unpair"]
+    static let features = ["haptics", "unpair", "notify"]
 
     let config: ShellConfig
     weak var webView: WKWebView?
@@ -52,6 +52,24 @@ final class Bridge: NSObject, WKScriptMessageHandler {
             // server-side revoke (retried until the server answers) in case that call never reached the server.
             reply(re: id, ok: true, to: frame, generation: generation)
             Task { await self.onUnpair?() }
+        case "notify_schedule":
+            // Auxiliary local reminder (generic fixed text, no APNs). Validated here, replied to the sending frame only.
+            switch NotificationManager.parseSchedule(payload) {
+            case .failure(let f):
+                reply(re: id, ok: false, errorCode: f.rawValue, to: frame, generation: generation)
+            case .success(let req):
+                Task {
+                    let failure = await NotificationManager.shared.schedule(id: req.id, afterSec: req.afterSec)
+                    self.reply(re: id, ok: failure == nil, errorCode: failure?.rawValue, to: frame, generation: generation)
+                }
+            }
+        case "notify_cancel":
+            guard let nid = NotificationManager.parseID(payload) else {
+                reply(re: id, ok: false, errorCode: NotificationManager.Failure.invalidArgument.rawValue, to: frame, generation: generation)
+                return
+            }
+            NotificationManager.shared.cancel(id: nid)
+            reply(re: id, ok: true, to: frame, generation: generation)
         default:
             reply(re: id, ok: false, errorCode: "unknown_type", to: frame, generation: generation)
         }

@@ -30,6 +30,7 @@ final class ShellModel: ObservableObject {
         var persisted = false
         if let token { persisted = revoker.persistPending(token) }
         await store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast)
+        await NotificationManager.shared.cancelAll()
         reload()
         if let token { await revoker.revoke(token: token, persisted: persisted) }
     }
