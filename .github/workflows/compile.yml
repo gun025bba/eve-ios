@@ -1,0 +1,69 @@
+name: compile
+# Compile verification for pull requests only: no signing, no artifacts, no attestation, no secrets.
+# Security review: `pull_request` (never pull_request_target), read-only token, actions pinned to SHAs.
+# The release/IPA pipeline stays in build-ipa.yml (push to main / manual dispatch only).
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compile-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  XCODEGEN_VERSION: "2.46.0"
+  XCODEGEN_SHA256: "4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806"
+
+jobs:
+  compile:
+    runs-on: macos-26
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Source leak check (counts only, never prints matches)
+        run: |
+          set -euo pipefail
+          PAT='\.ts\.net|(^|[^0-9])100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]+\.[0-9]+|fd7a:115c:a1e0:'
+          if git grep -qIE "$PAT" -- . ':!.github/workflows'; then
+            echo "::error::tracked files contain a forbidden address pattern (matches not printed)"; exit 1
+          fi
+          echo "no forbidden address patterns in tracked files"
+
+      - name: Select Xcode 26.x
+        run: |
+          XC=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)
+          echo "Using $XC"
+          sudo xcode-select -s "$XC/Contents/Developer"
+          xcodebuild -version
+
+      - name: Install pinned XcodeGen (release zip + sha256)
+        run: |
+          curl -fsSL -o xcodegen.zip "https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip"
+          echo "${XCODEGEN_SHA256}  xcodegen.zip" | shasum -a 256 -c -
+          unzip -q xcodegen.zip -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
+          rm xcodegen.zip
+
+      - name: Generate project (placeholder host, no real address)
+        run: |
+          cp Config/Local.xcconfig.example Config/Local.xcconfig
+          sed -i '' 's/^EVE_HOST = .*/EVE_HOST = eve.example.invalid/' Config/Local.xcconfig
+          grep -q '^EVE_HOST = eve.example.invalid$' Config/Local.xcconfig || { echo "::error::placeholder substitution failed"; exit 1; }
+          xcodegen generate
+
+      - name: Compile (unsigned, build only)
+        run: |
+          set -o pipefail
+          xcodebuild -project Eve.xcodeproj -scheme Eve -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM="" \
+            build | tail -n 200
