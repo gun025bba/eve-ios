@@ -1,5 +1,15 @@
 # Changelog
 
+## shell-v0.1.2
+Low-severity security follow-ups (N-1..N-6) to the shell-v0.1.1 review. Bridge contract stays v1.0.0.
+- N-1: a pending revoke that hits the 30-day TTL, or whose `savedAt` is in the future (clock moved back), gets one last forced attempt before it is deleted. A `lastAttempt` in the future counts as "never attempted", so a wrong clock cannot block retries.
+- N-2: saving the same token again changes nothing (savedAt and attempt counters are kept).
+- N-3: the install marker is only set after the Keychain was read successfully and the cleanup ran (a locked-device launch retries next time). Leftover entries from a previous install get one forced attempt and are deleted only if the server answered; if the first launch is offline they stay pending (TTL and caps still apply).
+- N-4: up to 3 pending tokens are kept (a second unpair no longer overwrites an unfinished first one; the oldest is dropped with a visible failure banner when the list is full).
+- N-5: the Keychain item is a versioned JSON list with optional bookkeeping fields. An item that cannot be decoded is deleted and reported in the banner; it is never interpreted as a token (the single-entry JSON written by early 0.1.1 builds is migrated).
+- N-6: the PR source leak check now also scans `.github/workflows`, fails closed on git errors, also flags RFC1918/link-local IPs and mDNS-style local host names, and tests its own pattern. `build-ipa.yml` self-test fixtures are split so the repo scan does not match them (behaviour unchanged).
+- Tests: new `EveLogicTests` unit-test target (macOS, no simulator) for `RevokePolicy` / `PendingList`, run by `compile.yml`. The pure logic moved to `Eve/RevokePolicy.swift`.
+
 ## shell-v0.1.1
 Security follow-ups L1/L2 from the shell-v0.1.0 review. Bridge contract stays v1.0.0 (no new/changed messages, `features` unchanged).
 - L1: unpair no longer leaves the server session alive when offline. Unpair copies the session cookie into the Keychain (this-device-only, `WhenUnlocked`) as a pending revoke, wipes all website data immediately (no 2 s wait), then calls `DELETE /v1/session`. The token never goes to UserDefaults, logs, or the bridge; redirects are not followed with it. The bridge `unpair` message uses the same path.

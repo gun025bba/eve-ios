@@ -71,9 +71,9 @@ jobs:
       - name: Leak check (counts only, never prints matches; ASCII + UTF-16LE/BE via iconv)
         run: |
           set -euo pipefail
-          PAT='\.ts\.net|(^|[^0-9])100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]+\.[0-9]+|fd7a:115c:a1e0:'
+          PAT='\.ts\.net|(^|[^0-9])100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]+\.[0-9]+|fd7a:115c:a1e[0]:'
           # Self-test: iconv must decode UTF-16LE, otherwise fail rather than silently skip.
-          printf 'a.ts.net' | iconv -f UTF-8 -t UTF-16LE | iconv -f UTF-16LE -t UTF-8 | grep -Eq "$PAT" \
+          printf 'a.ts''.net' | iconv -f UTF-8 -t UTF-16LE | iconv -f UTF-16LE -t UTF-8 | grep -Eq "$PAT" \
             || { echo "::error::UTF-16 scan unsupported (iconv self-test failed)"; exit 1; }
           rm -rf ipa_x && mkdir ipa_x && unzip -q Eve.ipa -d ipa_x
           scan() (  # $1 file; returns 0 if a forbidden pattern is found (subshell: no pipefail, grep -q may SIGPIPE upstream)
@@ -88,11 +88,11 @@ jobs:
             return 1
           )
           # Positive self-tests: planted ASCII / UTF-16LE (odd offset) / UTF-16BE samples must be detected.
-          printf 'x.ts.net' > st_a
-          printf 'Zx.ts.net' | iconv -f UTF-8 -t UTF-16LE > st_l
-          printf 'fd7a:115c:a1e0:1' | iconv -f UTF-8 -t UTF-16BE > st_b
-          { printf 'Q'; printf 'x.ts.net' | iconv -f UTF-8 -t UTF-16LE; } > st_lo   # 1-byte shifted LE
-          { printf 'Q'; printf 'x.ts.net' | iconv -f UTF-8 -t UTF-16BE; } > st_bo   # 1-byte shifted BE
+          printf 'x.ts''.net' > st_a
+          printf 'Zx.ts''.net' | iconv -f UTF-8 -t UTF-16LE > st_l
+          printf 'fd7a:115c:a1e0'':1' | iconv -f UTF-8 -t UTF-16BE > st_b
+          { printf 'Q'; printf 'x.ts''.net' | iconv -f UTF-8 -t UTF-16LE; } > st_lo   # 1-byte shifted LE
+          { printf 'Q'; printf 'x.ts''.net' | iconv -f UTF-8 -t UTF-16BE; } > st_bo   # 1-byte shifted BE
           for t in st_a st_l st_b st_lo st_bo; do scan "$t" || { echo "::error::leak scanner self-test failed ($t)"; exit 1; }; done
           rm -f st_a st_l st_b st_lo st_bo
           HITS=0; FILES=0; SAW_PLIST=0; SAW_EXE=0

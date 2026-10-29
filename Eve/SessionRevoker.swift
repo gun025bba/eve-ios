@@ -7,17 +7,19 @@ import WebKit
 ///
 /// On unpair the shell copies the session cookie into the Keychain as a *pending revoke*, wipes all local website
 /// data immediately, then calls `DELETE /v1/session` (the API the web's logout uses). If that fails it is retried
-/// on launch, when the app becomes active and when the network path becomes usable, with bounds:
-/// - TTL: the pending token is deleted after `RevokePolicy.maxAge` (30 days, the server's idle expiry).
+/// on launch, when the app becomes active and when the network path becomes usable, with bounds (see `RevokePolicy`):
+/// - TTL: a pending token gets one last attempt and is then deleted after 30 days (the server's idle expiry); the
+///   same applies when the clock looks wrong (saved in the future).
 /// - Attempts: server answers that are not success are counted; permanent rejections (403/404/...) delete the
 ///   token after a few tries, transient ones (5xx/429/408) after more. Network errors only wait for the TTL.
 /// - Backoff: minimum interval between non-forced attempts grows exponentially up to 6 hours.
-/// - Compare-and-clear: a result only deletes/updates the stored item if it still holds the token that was tried.
+/// - Up to `PendingList.maxEntries` tokens are kept (a second unpair does not overwrite an unfinished first one).
+/// - Compare-and-clear: a result only touches the entry holding the token that was tried.
 /// The token is never kept in UserDefaults, logged, or passed over the bridge.
 enum RevokeState: Equatable {
     case none
     case pending               // a revoke is stored and will be retried
-    case failed(String)        // gave up / could not store; server session may still be alive
+    case failed(String)        // gave up / could not store; the server session may still be alive
 }
 
 @MainActor
@@ -49,7 +51,9 @@ final class SessionRevoker: NSObject, ObservableObject, URLSessionTaskDelegate {
     /// Persists the token as a pending revoke. Returns false if the Keychain refused it.
     @discardableResult
     func persistPending(_ token: String) -> Bool {
-        let ok = PendingTokenStore.save(token)
+        var dropped = 0
+        let ok = PendingTokenStore.mutate { dropped = $0.add(token: token, now: Date().timeIntervalSince1970) }
+        if dropped > 0 { state = .failed("overflow") }   // an older unfinished revoke was dropped
         refreshState()
         return ok
     }
@@ -67,7 +71,7 @@ final class SessionRevoker: NSObject, ObservableObject, URLSessionTaskDelegate {
         }
     }
 
-    /// Retry a persisted pending revoke, if any (honours backoff). Safe to call often.
+    /// Retry persisted pending revokes, if any (honours backoff). Safe to call often.
     func retryPending() async { await processPending(force: false) }
 
     /// Call once at launch: first-launch cleanup, retry now, and retry whenever connectivity comes back.
@@ -86,23 +90,42 @@ final class SessionRevoker: NSObject, ObservableObject, URLSessionTaskDelegate {
         monitor = m
     }
 
-    func dismissFailure() { if case .failed = state { state = .none } }
+    func dismissFailure() {
+        if case .failed = state { state = .none }
+        refreshState()
+    }
 
-    /// Keychain items survive app deletion. A fresh install (no marker) with an item left over is stale:
-    /// make one last forced attempt, then delete it regardless.
+    /// Keychain items survive app deletion, so entries found on the first launch of an install (no marker) are
+    /// leftovers of a previous install. Each gets one forced attempt and is deleted if the server answered at all;
+    /// if we are offline it stays pending (TTL and caps still apply). The marker is only set once the Keychain was
+    /// read successfully and the cleanup ran, so a locked-device launch does not skip it.
     private func firstLaunchCleanup() async {
         let d = UserDefaults.standard
         guard !d.bool(forKey: Self.installMarker) else { return }
+        switch PendingTokenStore.load() {
+        case .unavailable:
+            return                                   // try again next launch
+        case .none:
+            break
+        case .corrupt:
+            PendingTokenStore.deleteItem()
+            state = .failed("corrupt")
+        case .list(let list):
+            for stale in list.entries {
+                let r = await send(token: stale.token)
+                if r != .network { PendingTokenStore.mutate { $0.remove(token: stale.token) } }
+            }
+        }
         d.set(true, forKey: Self.installMarker)
-        guard let stale = PendingTokenStore.load() else { return }
-        await processPending(force: true)
-        PendingTokenStore.clear(ifToken: stale.token)
         refreshState()
     }
 
     private func refreshState() {
-        if PendingTokenStore.load() != nil { state = .pending }
-        else if case .pending = state { state = .none }
+        if case .failed = state { return }          // a failure stays visible until dismissed
+        switch PendingTokenStore.load() {
+        case .list(let l) where !l.isEmpty: state = .pending
+        default: state = .none
+        }
     }
 
     private func processPending(force: Bool) async {
@@ -111,43 +134,57 @@ final class SessionRevoker: NSObject, ObservableObject, URLSessionTaskDelegate {
         var forced = force
         repeat {
             rerunForced = false
-            await processOnce(force: forced)
+            await processAll(force: forced)
             forced = true
         } while rerunForced
         inFlight = false
     }
 
-    private func processOnce(force: Bool) async {
-        guard var e = PendingTokenStore.load() else { refreshState(); return }
-        let now = Date().timeIntervalSince1970
-        if RevokePolicy.isExpired(savedAt: e.savedAt, now: now) {
-            PendingTokenStore.clear(ifToken: e.token)
-            state = .failed("expired")
-            return
+    private func processAll(force: Bool) async {
+        switch PendingTokenStore.load() {
+        case .none, .unavailable:
+            refreshState()
+        case .corrupt:
+            PendingTokenStore.deleteItem()             // never interpret an unreadable item as a token
+            state = .failed("corrupt")
+        case .list(let list):
+            for entry in list.entries { await process(entry, force: force) }
+            refreshState()
         }
-        if !force, now - e.lastAttempt < RevokePolicy.minInterval(attempts: e.attempts) { state = .pending; return }
+    }
 
+    private func process(_ entry: PendingEntry, force: Bool) async {
+        var e = entry
         let tried = e.token
+        let now = Date().timeIntervalSince1970
+
+        switch RevokePolicy.expiry(savedAt: e.savedAt, now: now) {
+        case .expired, .clockSkew:
+            // Last attempt before deleting, so a wrong clock or a long absence does not silently keep the session alive.
+            let r = await send(token: tried)
+            PendingTokenStore.mutate { $0.remove(token: tried) }
+            if r != .done { state = .failed("expired") }
+            return
+        case .fresh:
+            break
+        }
+        if !force, RevokePolicy.shouldWait(lastAttempt: e.lastAttempt, attempts: e.attempts, now: now) { return }
+
         e.lastAttempt = now
         let result = await send(token: tried)
         switch result {
         case .done:
-            PendingTokenStore.clear(ifToken: tried)           // compare-and-clear
-            refreshState()
-            if case .pending = state { return }               // a newer token was queued meanwhile
-            state = .none
+            PendingTokenStore.mutate { $0.remove(token: tried) }          // compare-and-clear
         case .network:
-            PendingTokenStore.update(e, onlyIfToken: tried)   // keep; wait for the next trigger or the TTL
-            state = .pending
+            PendingTokenStore.mutate { $0.update(e) }                      // keep; wait for the next trigger or the TTL
         case .permanent, .transient:
             e.attempts += 1
             if result == .permanent { e.permanentFailures += 1 }
             if RevokePolicy.shouldGiveUp(attempts: e.attempts, permanentFailures: e.permanentFailures) {
-                PendingTokenStore.clear(ifToken: tried)
+                PendingTokenStore.mutate { $0.remove(token: tried) }
                 state = .failed(result == .permanent ? "rejected" : "gave_up")
             } else {
-                PendingTokenStore.update(e, onlyIfToken: tried)
-                state = .pending
+                PendingTokenStore.mutate { $0.update(e) }
             }
         }
     }
@@ -199,48 +236,16 @@ final class SessionRevoker: NSObject, ObservableObject, URLSessionTaskDelegate {
     }
 }
 
-/// Pure decisions (no I/O), kept separate so they can be unit-tested.
-enum RevokePolicy {
-    static let maxAge: TimeInterval = 30 * 24 * 3600        // matches the server's 30-day idle expiry
-    static let maxPermanentResponses = 3
-    static let maxFailedResponses = 10
-    static let maxBackoff: TimeInterval = 6 * 3600
-
-    enum Outcome { case done, permanent, transient }
-
-    /// 204/200: revoked. 401: session already invalid. 5xx/408/429: try again later. Anything else
-    /// (403 origin/identity rejection, 404, 3xx because redirects are not followed, other 4xx): permanent.
-    static func outcome(forStatus code: Int) -> Outcome {
-        switch code {
-        case 200, 204, 401: return .done
-        case 408, 429, 500...599: return .transient
-        default: return .permanent
-        }
-    }
-
-    static func isExpired(savedAt: TimeInterval, now: TimeInterval) -> Bool {
-        now - savedAt >= maxAge || savedAt > now + 24 * 3600   // also drop items with an implausible future timestamp
-    }
-
-    static func minInterval(attempts: Int) -> TimeInterval {
-        min(30 * pow(2, Double(min(max(attempts, 0), 20))), maxBackoff)
-    }
-
-    static func shouldGiveUp(attempts: Int, permanentFailures: Int) -> Bool {
-        permanentFailures >= maxPermanentResponses || attempts >= maxFailedResponses
-    }
-}
-
-/// The single pending-revoke item in the Keychain (JSON: token + bookkeeping).
-struct PendingEntry: Codable, Equatable {
-    var token: String
-    var savedAt: TimeInterval
-    var lastAttempt: TimeInterval = 0
-    var attempts: Int = 0
-    var permanentFailures: Int = 0
-}
-
+/// The pending-revoke list in the Keychain: one generic-password item holding a versioned JSON `PendingList`.
+/// Read-modify-write happens synchronously on the main actor, so there is no interleaving between load and write.
 enum PendingTokenStore {
+    enum Loaded {
+        case none                  // no item
+        case list(PendingList)
+        case corrupt               // item exists but is not a valid current-version list: delete, never use as a token
+        case unavailable           // Keychain could not be read right now (e.g. device locked): do not decide anything
+    }
+
     private static let service = "eve.shell.pending-revoke"
     private static let account = "session"
     // Stricter than AfterFirstUnlock: retries only run while the app is in use (unlocked), never in the background.
@@ -252,41 +257,32 @@ enum PendingTokenStore {
          kSecAttrAccount as String: account]
     }
 
-    /// New pending entry for `token`. Uses update-then-add so a failure never destroys an existing item.
-    static func save(_ token: String) -> Bool {
-        write(PendingEntry(token: token, savedAt: Date().timeIntervalSince1970))
-    }
-
-    /// Update bookkeeping, but only if the stored item still holds `token` (compare-and-set).
-    @discardableResult
-    static func update(_ entry: PendingEntry, onlyIfToken token: String) -> Bool {
-        guard let cur = load(), cur.token == token else { return false }
-        var next = entry
-        next.token = token
-        next.savedAt = cur.savedAt
-        return write(next)
-    }
-
-    /// Delete only if the stored item still holds `token` (compare-and-clear).
-    static func clear(ifToken token: String) {
-        guard let cur = load(), cur.token == token else { return }
-        SecItemDelete(query as CFDictionary)
-    }
-
-    static func load() -> PendingEntry? {
+    static func load() -> Loaded {
         var q = query
         q[kSecReturnData as String] = true
         q[kSecMatchLimit as String] = kSecMatchLimitOne
         var out: AnyObject?
-        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let data = out as? Data else { return nil }
-        if let e = try? JSONDecoder().decode(PendingEntry.self, from: data) { return e }
-        // Legacy/raw value: treat as a fresh entry so it is still bounded by the TTL from now.
-        guard let raw = String(data: data, encoding: .utf8), !raw.isEmpty else { return nil }
-        return PendingEntry(token: raw, savedAt: Date().timeIntervalSince1970)
+        let status = SecItemCopyMatching(q as CFDictionary, &out)
+        if status == errSecItemNotFound { return .none }
+        guard status == errSecSuccess else { return .unavailable }
+        guard let data = out as? Data, let list = PendingList.decode(data) else { return .corrupt }
+        return .list(list)
     }
 
-    private static func write(_ entry: PendingEntry) -> Bool {
-        guard let data = try? JSONEncoder().encode(entry) else { return false }
+    /// Applies `change` to the stored list (a corrupt item counts as empty) and writes it back, deleting the item when
+    /// the list is empty. Uses SecItemUpdate then SecItemAdd, never delete-then-add. Returns false if it could not be
+    /// stored (or the Keychain could not be read), in which case nothing was changed.
+    @discardableResult
+    static func mutate(_ change: (inout PendingList) -> Void) -> Bool {
+        var list: PendingList
+        switch load() {
+        case .none, .corrupt: list = PendingList()
+        case .list(let l): list = l
+        case .unavailable: return false
+        }
+        change(&list)
+        if list.isEmpty { return deleteItem() }
+        guard let data = list.encode() else { return false }
         let attrs: [String: Any] = [kSecValueData as String: data, kSecAttrAccessible as String: accessible]
         var status = SecItemUpdate(query as CFDictionary, attrs as CFDictionary)
         if status == errSecItemNotFound {
@@ -295,5 +291,11 @@ enum PendingTokenStore {
             status = SecItemAdd(add as CFDictionary, nil)
         }
         return status == errSecSuccess
+    }
+
+    @discardableResult
+    static func deleteItem() -> Bool {
+        let s = SecItemDelete(query as CFDictionary)
+        return s == errSecSuccess || s == errSecItemNotFound
     }
 }
