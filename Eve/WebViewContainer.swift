@@ -15,6 +15,8 @@ struct WebViewContainer: UIViewRepresentable {
 
         let webView = WKWebView(frame: .zero, configuration: config)
         bridge.webView = webView
+        bridge.onUnpair = { [weak model] in await model?.wipeAndRevoke() }
+        context.coordinator.bridge = bridge
         model.bridge = bridge
         model.webView = webView
 
@@ -48,6 +50,7 @@ struct WebViewContainer: UIViewRepresentable {
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
         let model: ShellModel
+        weak var bridge: Bridge?
         init(model: ShellModel) { self.model = model }
 
         @objc func settingsGesture(_ g: UILongPressGestureRecognizer) {
@@ -74,6 +77,11 @@ struct WebViewContainer: UIViewRepresentable {
                 UIApplication.shared.open(url)
             }
             return nil
+        }
+
+        // A new document committed: any bridge reply still pending for the old document must be dropped (L2).
+        func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+            bridge?.documentGeneration += 1
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

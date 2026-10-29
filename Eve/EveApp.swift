@@ -11,6 +11,7 @@ struct EveApp: App {
 
 struct ShellView: View {
     @StateObject private var model = ShellModel()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         ZStack {
@@ -22,13 +23,18 @@ struct ShellView: View {
             }
         }
         .ignoresSafeArea()
+        // L1: retry a pending server-side session revoke at launch, on foreground and when the network returns.
+        .task { SessionRevoker.shared.start() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await SessionRevoker.shared.retryPending() } }
+        }
         // Shell settings: three-finger long press opens the unpair dialog.
         .confirmationDialog("Eve shell \(ShellConfig.shellVersion)", isPresented: $model.showUnpairConfirm) {
             Button("Unpair this device", role: .destructive) { model.unpair() }
             Button("Reload") { model.reload() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Unpair signs out and deletes all cookies and website data stored by this app.")
+            Text("Unpair signs out, deletes all cookies and website data stored by this app, and revokes the server session (retried automatically if you are offline).")
         }
     }
 }

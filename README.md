@@ -22,8 +22,8 @@ xcodegen generate && open Eve.xcodeproj
 
 ## Use
 - First launch: pair in the web UI (session cookie is stored only in the WebView's persistent data store). Pair separately from Safari.
-- Shell settings: three-finger long press → Unpair (calls web logout, then wipes all cookies/website data). Also on the offline screen.
+- Shell settings: three-finger long press → Unpair (asks the web to log out, wipes all cookies/website data immediately, and revokes the server session; if offline, the revoke is kept in the Keychain and retried on launch/foreground/network return). Also on the offline screen.
 
 ## Bridge (v1.0.0)
 Web → shell `window.webkit.messageHandlers.eve.postMessage({v:1,id,type,payload})`; shell → web `window.__eveShell.receive(msg)`.
-Types: `hello` → `capabilities {bridge, shell, features}`, `haptics {style}`, `unpair`. Shell → web: `logout_requested` (web should call its logout API then send `unpair`). Unknown → `{ok:false,error_code:"unknown_type"}`.
+Types: `hello` → `capabilities {bridge, shell, features}`, `haptics {style}`, `unpair`. Shell → web: `logout_requested` (web should call its logout API then send `unpair`). Unknown → `{ok:false,error_code:"unknown_type"}`. Replies go only to the frame that sent the request (main frame, configured origin, same document).
