@@ -1,5 +1,21 @@
 # Changelog
 
+## shell-v0.2.0 (bridge v1.1.0)
+Depends on shell-v0.1.1/v0.1.2 (merged: L1/L2 frame-scoped replies, bounded pending revoke). Bridge 1.1.0 is a backward-compatible minor: only additions, `features` gains `"notify"`.
+- New bridge messages `notify_schedule {id, afterSec}` and `notify_cancel {id}`: local reminder via `UNUserNotificationCenter` (no APNs, works with a free Apple ID). Auxiliary only; fires at a fixed delay.
+- Fixed generic notification text; the web cannot supply title/body (no message content on the lock screen). `id` is 1-64 chars `[A-Za-z0-9_-]`, `afterSec` 5-3600, at most 8 pending. Errors: `invalid_argument`, `permission_denied`, `limit_reached`, `notify_failed`.
+- Notification permission is requested lazily on the first `notify_schedule`, and the system prompt is only shown while the app is active (otherwise `permission_denied`; an already authorized app can still schedule while going to the background).
+- Same L2 path as every message: main frame on the configured origin only, reply only to the sending frame.
+- No banner while the app is in the foreground; delivered reminders cleared on foreground; unpair cancels all pending reminders (see below).
+- Security review of PR #11 (M-1, L-1..L-5):
+  - M-1: the limit of 8 is enforced atomically. The scheduler is an actor that counts reserved/scheduled ids itself (no `await` between the count and the reservation), so concurrent messages cannot exceed it; entries expire at their fire time, and reminders that survived an app restart are counted once at first use. Unit test: 20 concurrent schedules, exactly 8 accepted, via an injected fake notification center.
+  - L-1: unpair closes the scheduler first (new `notify_schedule` gets `notify_failed`) and cancels everything, then cancels once more after wipe + reload; a schedule that was in flight across the close removes what it added. The scheduler reopens on the first `hello` of a document loaded after the unpair finished (next pairing).
+  - L-2: the permission prompt is only requested while the app is active.
+  - L-3: the id length is checked in UTF-8 bytes before any per-character check.
+  - L-4: validation moved to `Eve/NotificationValidation.swift`, the limit/closed logic to `Eve/NotificationScheduler.swift` (Foundation only); both are compiled into `EveLogicTests` with new tests.
+  - L-5: FE guide describes rounding of fractional `afterSec`, the limit of 8 and the exact behavior on logout.
+- FE guide: `docs/fe-local-notify.md`.
+
 ## shell-v0.1.2
 Low-severity security follow-ups (N-1..N-6) to the shell-v0.1.1 review. Bridge contract stays v1.0.0.
 - N-1: a pending revoke that hits the 30-day TTL, or whose `savedAt` is in the future (clock moved back), gets one last forced attempt before it is deleted. A `lastAttempt` in the future counts as "never attempted", so a wrong clock cannot block retries.
