@@ -7,7 +7,7 @@ Low-severity security follow-ups (N-1..N-6) to the shell-v0.1.1 review. Bridge c
 - N-3: the install marker is only set after the Keychain was read successfully and the cleanup ran (a locked-device launch retries next time). Leftover entries from a previous install get one forced attempt and are deleted only if the server answered; if the first launch is offline they stay pending (TTL and caps still apply).
 - N-4: up to 3 pending tokens are kept (a second unpair no longer overwrites an unfinished first one; the oldest is dropped with a visible failure banner when the list is full).
 - N-5: the Keychain item is a versioned JSON list with optional bookkeeping fields. An item that cannot be decoded is deleted and reported in the banner; it is never interpreted as a token (the single-entry JSON written by early 0.1.1 builds is migrated).
-- N-6: the PR source leak check now also scans `.github/workflows`, fails closed on git errors, also flags RFC1918/link-local IPs and `.local` names, and tests its own pattern. `build-ipa.yml` self-test fixtures are split so the repo scan does not match them (behaviour unchanged).
+- N-6: the PR source leak check now also scans `.github/workflows`, fails closed on git errors, also flags RFC1918/link-local IPs and mDNS-style local host names, and tests its own pattern. `build-ipa.yml` self-test fixtures are split so the repo scan does not match them (behaviour unchanged).
 - Tests: new `EveLogicTests` unit-test target (macOS, no simulator) for `RevokePolicy` / `PendingList`, run by `compile.yml`. The pure logic moved to `Eve/RevokePolicy.swift`.
 
 ## shell-v0.1.1
