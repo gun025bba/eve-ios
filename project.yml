@@ -34,7 +34,7 @@ targets:
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
-  # Pure-logic unit tests (RevokePolicy / PendingList). Compiled without the app so they run on the macOS runner
+  # Pure-logic unit tests (RevokePolicy / PendingList / notify validation + scheduler). Compiled without the app so they run on the macOS runner
   # with no simulator and no signing; the shared source file has no UIKit/Security/WebKit dependencies.
   EveLogicTests:
     type: bundle.unit-test
@@ -43,6 +43,8 @@ targets:
     sources:
       - Tests/EveLogicTests
       - Eve/RevokePolicy.swift
+      - Eve/NotificationValidation.swift
+      - Eve/NotificationScheduler.swift
     settings:
       base:
         SWIFT_VERSION: "5.0"

@@ -34,6 +34,7 @@ final class Bridge: NSObject, WKScriptMessageHandler {
     private func handle(id: String, type: String, payload: [String: Any], frame: WKFrameInfo, generation: Int) {
         switch type {
         case "hello":
+            Task { await NotificationManager.shared.pairingHello() }   // reopens notify after a finished unpair
             reply(re: id, ok: true, to: frame, generation: generation)
             send(type: "capabilities", payload: [
                 "bridge": Self.bridgeVersion, "shell": ShellConfig.shellVersion, "features": Self.features,
@@ -54,7 +55,7 @@ final class Bridge: NSObject, WKScriptMessageHandler {
             Task { await self.onUnpair?() }
         case "notify_schedule":
             // Auxiliary local reminder (generic fixed text, no APNs). Validated here, replied to the sending frame only.
-            switch NotificationManager.parseSchedule(payload) {
+            switch NotifyValidation.parseSchedule(payload) {
             case .failure(let f):
                 reply(re: id, ok: false, errorCode: f.rawValue, to: frame, generation: generation)
             case .success(let req):
@@ -64,12 +65,14 @@ final class Bridge: NSObject, WKScriptMessageHandler {
                 }
             }
         case "notify_cancel":
-            guard let nid = NotificationManager.parseID(payload) else {
-                reply(re: id, ok: false, errorCode: NotificationManager.Failure.invalidArgument.rawValue, to: frame, generation: generation)
+            guard let nid = NotifyValidation.parseID(payload) else {
+                reply(re: id, ok: false, errorCode: NotifyFailure.invalidArgument.rawValue, to: frame, generation: generation)
                 return
             }
-            NotificationManager.shared.cancel(id: nid)
-            reply(re: id, ok: true, to: frame, generation: generation)
+            Task {
+                await NotificationManager.shared.cancel(id: nid)
+                self.reply(re: id, ok: true, to: frame, generation: generation)
+            }
         default:
             reply(re: id, ok: false, errorCode: "unknown_type", to: frame, generation: generation)
         }
