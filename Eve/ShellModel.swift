@@ -24,6 +24,7 @@ final class ShellModel: ObservableObject {
     /// 1) copy the session cookie into the Keychain as a pending revoke, 2) wipe all website data now (no waiting),
     /// 3) reload, 4) try the revoke; if it fails it is retried on launch, foreground and when the network returns.
     func wipeAndRevoke() async {
+        await NotificationManager.shared.cancelAll()   // no reminder may fire for a session that is being unpaired
         let store = WKWebsiteDataStore.default()
         let revoker = SessionRevoker.shared
         let token = await revoker.currentSessionToken(from: store.httpCookieStore)

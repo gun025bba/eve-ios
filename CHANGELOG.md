@@ -1,5 +1,14 @@
 # Changelog
 
+## shell-v0.2.0 (bridge v1.1.0)
+Depends on shell-v0.1.1/v0.1.2 (merged: L1/L2 frame-scoped replies, bounded pending revoke). Bridge 1.1.0 is a backward-compatible minor: only additions, `features` gains `"notify"`.
+- New bridge messages `notify_schedule {id, afterSec}` and `notify_cancel {id}`: local reminder via `UNUserNotificationCenter` (no APNs, works with a free Apple ID). Auxiliary only; fires at a fixed delay.
+- Fixed generic notification text; the web cannot supply title/body (no message content on the lock screen). `id` is 1-64 chars `[A-Za-z0-9_-]`, `afterSec` 5-3600, at most 8 pending. Errors: `invalid_argument`, `permission_denied`, `limit_reached`, `notify_failed`.
+- Notification permission is requested lazily on the first `notify_schedule`.
+- Same L2 path as every message: main frame on the configured origin only, reply only to the sending frame.
+- No banner while the app is in the foreground; delivered reminders cleared on foreground; unpair cancels all pending reminders.
+- FE guide: `docs/fe-local-notify.md`.
+
 ## shell-v0.1.2
 Low-severity security follow-ups (N-1..N-6) to the shell-v0.1.1 review. Bridge contract stays v1.0.0.
 - N-1: a pending revoke that hits the 30-day TTL, or whose `savedAt` is in the future (clock moved back), gets one last forced attempt before it is deleted. A `lastAttempt` in the future counts as "never attempted", so a wrong clock cannot block retries.
