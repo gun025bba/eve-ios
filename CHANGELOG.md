@@ -1,7 +1,7 @@
 # Changelog
 
 ## shell-v0.2.0 (bridge v1.1.0)
-Depends on shell-v0.1.1 (PR #7: L1/L2 frame-scoped replies). Bridge 1.1.0 is a backward-compatible minor: only additions, `features` gains `"notify"`.
+Depends on shell-v0.1.1 (merged in #9: L1/L2 frame-scoped replies, bounded pending revoke); rebased onto main. Bridge 1.1.0 is a backward-compatible minor: only additions, `features` gains `"notify"`.
 - New bridge messages `notify_schedule {id, afterSec}` and `notify_cancel {id}`: local reminder via `UNUserNotificationCenter` (no APNs, works with a free Apple ID). Auxiliary only; fires at a fixed delay.
 - Fixed generic notification text; the web cannot supply title/body (no message content on the lock screen). `id` is 1-64 chars `[A-Za-z0-9_-]`, `afterSec` 5-3600, at most 8 pending. Errors: `invalid_argument`, `permission_denied`, `limit_reached`, `notify_failed`.
 - Notification permission is requested lazily on the first `notify_schedule`.
