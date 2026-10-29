@@ -29,7 +29,7 @@ When the user unpairs (settings or the bridge `unpair` message), the shell, in t
 1. closes notify: from now on `notify_schedule` replies `notify_failed` (`notify_cancel` still works), and every pending reminder and every delivered reminder of the app is removed;
 2. wipes the website data and reloads the page;
 3. cancels everything once more after the reload has been started (this removes a reminder that was still being scheduled when step 1 ran).
-Notify stays closed until the next pairing: it reopens on the first `hello` of a document that is loaded after step 3. So after a logout/login, send `hello` (as you do on every load) and do not schedule before its reply. A reminder scheduled in one session is never delivered after an unpair.
+Notify stays closed until the next pairing: it reopens on the first `hello` of a document that was loaded after the unpair started (a `hello` of the page that was open at that moment never reopens it; one that arrives before step 2 has finished is held and takes effect when it finishes). So after a logout/login, send `hello` (as you do on every load) and do not schedule before its reply. A reminder scheduled in one session is never delivered after an unpair.
 
 ## Limits (do not promise more in the UI)
 - Fires at a fixed delay, not at real completion. Wording in the UI: "알림이 올 수 있어요" rather than "완료되면 알려드려요".

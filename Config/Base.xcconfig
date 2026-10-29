@@ -2,6 +2,6 @@
 EVE_HOST = eve.example.invalid
 EVE_START_PATH = /ui/
 EVE_BUNDLE_ID = com.example.eve
-EVE_SHELL_VERSION = 0.2.1
-EVE_BUILD_NUMBER = 5
+EVE_SHELL_VERSION = 0.2.2
+EVE_BUILD_NUMBER = 6
 #include? "Local.xcconfig"

@@ -52,6 +52,42 @@ final class NotificationValidationTests: XCTestCase {
         XCTAssertEqual(afterSec(r), 30)
     }
 
+    // MARK: L-7 NSNumber input (WKWebView delivers JS numbers as NSNumber)
+
+    func testNSNumberAfterSec() {
+        XCTAssertEqual(afterSec(schedule("a", NSNumber(value: 30))), 30)
+        XCTAssertEqual(afterSec(schedule("a", NSNumber(value: 30.0))), 30)
+        XCTAssertEqual(afterSec(schedule("a", NSNumber(value: Float(30)))), 30)
+        XCTAssertEqual(afterSec(schedule("a", NSNumber(value: 5.5))), 6)
+        XCTAssertEqual(afterSec(schedule("a", NSNumber(value: 5))), 5)
+        XCTAssertEqual(afterSec(schedule("a", NSNumber(value: 3600))), 3600)
+    }
+
+    func testNSNumberAfterSecRejected() {
+        let bad: [NSNumber] = [NSNumber(value: 4), NSNumber(value: 0), NSNumber(value: -1), NSNumber(value: 3601),
+                               NSNumber(value: 4.6), NSNumber(value: Double.nan), NSNumber(value: Double.infinity),
+                               NSNumber(value: -Double.infinity), NSNumber(value: Double.greatestFiniteMagnitude),
+                               NSNumber(value: Int.max), NSNumber(value: Int.min), NSNumber(value: UInt64.max),
+                               NSNumber(value: true), NSNumber(value: false)]
+        for n in bad { XCTAssertEqual(failure(schedule("a", n)), .invalidArgument, "\(n)") }
+    }
+
+    func testNSNumberAndNSStringIDs() {
+        XCTAssertNil(NotifyValidation.parseID(["id": NSNumber(value: 12)]))
+        XCTAssertNil(NotifyValidation.parseID(["id": NSNumber(value: true)]))
+        XCTAssertEqual(NotifyValidation.parseID(["id": NSString(string: "gen-1")]), "gen-1")
+        XCTAssertNil(NotifyValidation.parseID(["id": NSString(string: "a b")]))
+        XCTAssertNil(NotifyValidation.parseID(["id": NSNull()]))
+        XCTAssertNil(NotifyValidation.parseID(["id": NSArray()]))
+        XCTAssertNil(NotifyValidation.parseID(["id": NSDictionary()]))
+    }
+
+    func testNSNumberWrongContainerTypes() {
+        XCTAssertEqual(failure(schedule("a", NSString(string: "30"))), .invalidArgument)
+        XCTAssertEqual(failure(schedule("a", NSNull())), .invalidArgument)
+        XCTAssertEqual(failure(schedule("a", NSArray(object: NSNumber(value: 30)))), .invalidArgument)
+    }
+
     private func failure(_ r: Result<(id: String, afterSec: Int), NotifyFailure>) -> NotifyFailure? {
         if case .failure(let f) = r { return f }
         return nil

@@ -24,12 +24,22 @@ protocol NotificationCentering: Sendable {
 /// between reading the count and adding to `accepted`), so concurrent bridge messages cannot exceed `maxPending`.
 /// `accepted` is the shell's own bookkeeping (reserved + scheduled ids with their fire time), not a re-read of the
 /// OS list, because actor methods are re-entrant at every `await`.
+///
+/// Time: fire times are kept on the monotonic `ProcessInfo.systemUptime` clock (L-7), so a wall-clock change (manual
+/// time, timezone/NTP jump) can neither free a slot early nor keep one forever. `systemUptime` does not advance while
+/// the device sleeps, so a slot can be freed later than the real fire time, never earlier: the limit stays safe.
+/// The wall clock `now` is only used to translate the fire date of a reminder that survived an app restart.
+///
+/// Reopen (L-6): the scheduler is closed on unpair at document generation G (`Bridge.documentGeneration`). Only a
+/// `hello` from a document with generation > G can reopen it, so a `hello` of the document that was current when
+/// the unpair started (or any older one) can never do it.
 actor NotificationScheduler {
-    private struct Entry { let fire: Date; let token: UInt64 }
+    private struct Entry { let fire: TimeInterval; let token: UInt64 }
 
     private let center: NotificationCentering
     private let isAppActive: @Sendable () async -> Bool
     private let now: @Sendable () -> Date
+    private let uptime: @Sendable () -> TimeInterval
 
     private var accepted: [String: Entry] = [:]
     private var nextToken: UInt64 = 0
@@ -39,15 +49,22 @@ actor NotificationScheduler {
     private var closed = false
     /// Incremented on every close: a schedule that was in flight across a close removes what it just added.
     private var epoch: UInt64 = 0
-    /// Set when the unpair wipe has fully finished; the next `hello` of a new document reopens the scheduler.
+    /// Set when the unpair wipe has fully finished; a `hello` of a newer document then reopens the scheduler.
     private var reopenArmed = false
+    /// Document generation at the time of the last close. Only a `hello` with a larger generation may reopen.
+    private var closedAtGeneration = 0
+    /// Generation of a `hello` of a newer document that arrived before the wipe finished (before `reopenArmed`).
+    /// It is remembered and honoured in `finishUnpair`.
+    private var pendingHelloGeneration: Int?
 
     init(center: NotificationCentering,
          isAppActive: @escaping @Sendable () async -> Bool,
-         now: @escaping @Sendable () -> Date = { Date() }) {
+         now: @escaping @Sendable () -> Date = { Date() },
+         uptime: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
         self.center = center
         self.isAppActive = isAppActive
         self.now = now
+        self.uptime = uptime
     }
 
     // MARK: schedule
@@ -73,7 +90,7 @@ actor NotificationScheduler {
         nextToken &+= 1
         let token = nextToken
         let myEpoch = epoch
-        accepted[identifier] = Entry(fire: now().addingTimeInterval(TimeInterval(afterSec)), token: token)
+        accepted[identifier] = Entry(fire: uptime() + TimeInterval(afterSec), token: token)
         // ---- end atomic section ----
 
         do { try await center.add(identifier: identifier, afterSec: afterSec) }
@@ -113,25 +130,40 @@ actor NotificationScheduler {
     }
 
     /// Unpair step 1 (before the wipe): refuse new reminders and drop everything.
-    func closeAndCancelAll() async {
+    /// `generation` is the current `Bridge.documentGeneration`; only a `hello` of a later document can reopen.
+    /// A second unpair while still closed keeps the larger generation and forgets any remembered `hello`.
+    func closeAndCancelAll(generation: Int) async {
         closed = true
         epoch &+= 1
         reopenArmed = false
+        closedAtGeneration = max(closedAtGeneration, generation)
+        pendingHelloGeneration = nil
         await cancelAll()
     }
 
     /// Unpair step 2 (after wipe + reload finished): drop whatever slipped in meanwhile and allow reopening.
+    /// If a `hello` of a newer document already arrived (before this point) the scheduler opens now.
+    /// If another unpair started while this one was cancelling, that newer unpair owns the state: do nothing.
     func finishUnpair() async {
+        let myEpoch = epoch
         await cancelAll()
+        guard epoch == myEpoch else { return }
         reopenArmed = true
+        if let g = pendingHelloGeneration, g > closedAtGeneration { open() }
     }
 
-    /// Called on the bridge `hello` of a document loaded after a finished unpair (next pairing).
-    func pairingHello() {
-        if closed, reopenArmed {
-            closed = false
-            reopenArmed = false
-        }
+    /// Called on every bridge `hello`, with the generation of the document that sent it.
+    /// Reopens only when closed, the document is newer than the one current at close time, and the wipe finished;
+    /// a newer document's `hello` that comes first is remembered for `finishUnpair`.
+    func pairingHello(generation: Int) {
+        guard closed, generation > closedAtGeneration else { return }
+        if reopenArmed { open() } else { pendingHelloGeneration = generation }
+    }
+
+    private func open() {
+        closed = false
+        reopenArmed = false
+        pendingHelloGeneration = nil
     }
 
     var isClosed: Bool { closed }
@@ -141,7 +173,7 @@ actor NotificationScheduler {
 
     /// Forget entries whose fire time has passed (they were delivered and no longer count as pending).
     private func prune() {
-        let t = now()
+        let t = uptime()
         accepted = accepted.filter { $0.value.fire > t }
     }
 
@@ -153,12 +185,15 @@ actor NotificationScheduler {
         let items = await task.value
         if seeded { return }
         seeded = true
-        let t = now()
+        let wall = now()
+        let up = uptime()
         for p in items where p.identifier.hasPrefix(NotifyValidation.idPrefix) && accepted[p.identifier] == nil {
             nextToken &+= 1
-            // Unknown fire time: assume the latest possible one (conservative for the limit).
-            let fire = p.fireDate ?? t.addingTimeInterval(TimeInterval(NotifyValidation.maxAfterSec))
-            accepted[p.identifier] = Entry(fire: fire, token: nextToken)
+            // Translate the wall-clock fire date into the monotonic clock once. Unknown fire time: assume the
+            // latest possible one (conservative for the limit). The wait never exceeds `maxAfterSec`.
+            let remaining = p.fireDate.map { min(max($0.timeIntervalSince(wall), 0), TimeInterval(NotifyValidation.maxAfterSec)) }
+                ?? TimeInterval(NotifyValidation.maxAfterSec)
+            accepted[p.identifier] = Entry(fire: up + remaining, token: nextToken)
         }
     }
 }
