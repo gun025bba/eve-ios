@@ -1,5 +1,11 @@
 # Changelog
 
+## shell-v0.2.1
+App icon F (designer-approved) added as `AppIcon`. No code or bridge change; bridge stays v1.1.0.
+- `Eve/Assets.xcassets/AppIcon.appiconset`: single 1024 universal icon with any / dark / tinted appearances (iOS 18+ icon modes; on iOS 17 the "any" image is used). Any = opaque RGB, no alpha, full bleed (iOS applies the corner mask); dark = transparent background with the glyph only; tinted = grayscale glyph on transparent background.
+- `project.yml`: `ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon` (the asset catalog is picked up by the existing `Eve` sources).
+- Build number 5.
+
 ## shell-v0.2.0 (bridge v1.1.0)
 Depends on shell-v0.1.1/v0.1.2 (merged: L1/L2 frame-scoped replies, bounded pending revoke). Bridge 1.1.0 is a backward-compatible minor: only additions, `features` gains `"notify"`.
 - New bridge messages `notify_schedule {id, afterSec}` and `notify_cancel {id}`: local reminder via `UNUserNotificationCenter` (no APNs, works with a free Apple ID). Auxiliary only; fires at a fixed delay.
