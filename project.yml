@@ -34,3 +34,25 @@ targets:
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
+  # Pure-logic unit tests (RevokePolicy / PendingList). Compiled without the app so they run on the macOS runner
+  # with no simulator and no signing; the shared source file has no UIKit/Security/WebKit dependencies.
+  EveLogicTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - Tests/EveLogicTests
+      - Eve/RevokePolicy.swift
+    settings:
+      base:
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: invalid.example.EveLogicTests
+schemes:
+  EveLogicTests:
+    build:
+      targets:
+        EveLogicTests: all
+    test:
+      targets:
+        - EveLogicTests

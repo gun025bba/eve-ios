@@ -28,14 +28,31 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Source leak check (counts only, never prints matches)
+      - name: Source leak check (counts only, never prints matches; fail-closed)
         run: |
           set -euo pipefail
-          PAT='\.ts\.net|(^|[^0-9])100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]+\.[0-9]+|fd7a:115c:a1e0:'
-          if git grep -qIE "$PAT" -- . ':!.github/workflows'; then
-            echo "::error::tracked files contain a forbidden address pattern (matches not printed)"; exit 1
-          fi
-          echo "no forbidden address patterns in tracked files"
+          # Written so that the pattern text does not match itself (e.g. [.]ts[.]net), because every tracked file
+          # including .github/workflows is scanned. Covers Tailscale names/ranges, RFC1918 + link-local IPs and mDNS-style local names.
+          PAT='[.]ts[.]net|[.]loca[l]($|[^A-Za-z0-9_-])|fd7a:115c:a1e[0]:'
+          PAT="$PAT|(^|[^0-9.])100[.](6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])[.][0-9]+[.][0-9]+"
+          PAT="$PAT|(^|[^0-9.])10[.][0-9]+[.][0-9]+[.][0-9]+"
+          PAT="$PAT|(^|[^0-9.])172[.](1[6-9]|2[0-9]|3[01])[.][0-9]+[.][0-9]+"
+          PAT="$PAT|(^|[^0-9.])(192[.]168|169[.]254)[.][0-9]+[.][0-9]+"
+          # Self-test of the pattern (samples are split so they do not match themselves in this file).
+          for s in "x.ts"".net" "h.loc""al" "10.1.""2.3" "192.168.""1.5" "172.2""0.0.1" "100.6""4.1.1" "169.254.""1.1" "fd7a:115c:a1e""0::1"; do
+            printf '%s\n' "$s" | grep -Eq "$PAT" || { echo "::error::leak pattern self-test failed (positive)"; exit 1; }
+          done
+          for s in "1.10.2.3.4" "100.128.0.1" "172.15.0.1" "192.169.1.1" "Local.xcconfig" "example.invalid"; do
+            if printf '%s\n' "$s" | grep -Eq "$PAT"; then echo "::error::leak pattern self-test failed (negative)"; exit 1; fi
+          done
+          [ "$(git ls-files | wc -l)" -gt 0 ] || { echo "::error::no tracked files"; exit 1; }
+          rc=0
+          git grep -qIE "$PAT" -- . || rc=$?
+          case "$rc" in
+            0) echo "::error::tracked files contain a forbidden address pattern (matches not printed)"; exit 1 ;;
+            1) echo "no forbidden address patterns in tracked files" ;;
+            *) echo "::error::git grep failed (exit $rc)"; exit 1 ;;
+          esac
 
       - name: Select Xcode 26.x
         run: |
@@ -67,3 +84,11 @@ jobs:
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM="" \
             build | tail -n 200
+
+      - name: Unit tests (pure logic; macOS, ad-hoc signed, no simulator, no secrets)
+        run: |
+          set -o pipefail
+          xcodebuild test -project Eve.xcodeproj -scheme EveLogicTests \
+            -destination 'platform=macOS' \
+            -derivedDataPath build-tests \
+            CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM="" | tail -n 120
