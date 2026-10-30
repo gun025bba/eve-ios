@@ -1,5 +1,12 @@
 # Changelog
 
+## shell-v0.2.2
+Follow-up Lows L-6 / L-7 of the PR #11 security review (issue #12). Patch release: no new bridge message, bridge stays v1.1.0.
+- L-6: the notify scheduler reopens only for a document newer than the one that was current when the unpair started. The scheduler is closed at the current `Bridge.documentGeneration` G; a `hello` reopens it only if its generation is > G, so a `hello` of the old document (or an older one) can never do it. A newer document's `hello` that arrives before the wipe has finished is remembered and honoured in `finishUnpair`; one that arrives afterwards reopens right away. A second unpair that starts while the first one is still finishing keeps the larger generation, drops a remembered `hello`, and the first `finishUnpair` no longer arms the reopen.
+- L-7: reminder slots now expire on the monotonic `ProcessInfo.systemUptime` clock instead of the wall clock, so changing the date/time cannot free a slot early or keep it forever (a reminder from a previous run is converted once from its fire date, capped at 3600 s). `systemUptime` does not advance while the device sleeps, so a slot may be freed later than the real fire time, never earlier: the limit of 8 stays safe.
+- L-7 tests (`EveLogicTests`): close and cancel racing with an add in flight (the reminder that lands later is removed, nothing stays counted), a failed add never releases a newer entry of the same id, the limit holds while adds are in flight, hello/generation rules (old/same/older document, remembered hello, second unpair, overlapping finish), wall-clock jumps, and `NSNumber`/`NSString`/`NSNull` inputs as WKWebView delivers them.
+- No change for the web: `hello` is already sent on every load. Build number 6.
+
 ## shell-v0.2.1
 App icon F (designer-approved) added as `AppIcon`. No code or bridge change; bridge stays v1.1.0.
 - `Eve/Assets.xcassets/AppIcon.appiconset`: single 1024 universal icon with any / dark / tinted appearances (iOS 18+ icon modes; on iOS 17 the "any" image is used). Any = opaque RGB, no alpha, full bleed (iOS applies the corner mask); dark = transparent background with the glyph only; tinted = grayscale glyph on transparent background.

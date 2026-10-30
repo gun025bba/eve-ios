@@ -27,11 +27,12 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
     func cancel(id: String) async { await scheduler.cancel(id: id) }
 
     /// Unpair step 1 (before the wipe): close the scheduler and cancel everything.
-    func closeForUnpair() async { await scheduler.closeAndCancelAll() }
-    /// Unpair step 2 (after wipe + reload): cancel once more; the next pairing's `hello` reopens.
+    /// `generation` = `Bridge.documentGeneration` now; only a later document's `hello` can reopen.
+    func closeForUnpair(generation: Int) async { await scheduler.closeAndCancelAll(generation: generation) }
+    /// Unpair step 2 (after wipe + reload): cancel once more; a newer document's `hello` (before or after) reopens.
     func finishUnpair() async { await scheduler.finishUnpair() }
-    /// Bridge `hello` of a (new) document.
-    func pairingHello() async { await scheduler.pairingHello() }
+    /// Bridge `hello`, with the generation of the document that sent it.
+    func pairingHello(generation: Int) async { await scheduler.pairingHello(generation: generation) }
 
     /// App came to the foreground: the user is looking at the answer, drop already delivered reminders.
     func clearDelivered() {

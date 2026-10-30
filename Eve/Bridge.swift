@@ -34,7 +34,7 @@ final class Bridge: NSObject, WKScriptMessageHandler {
     private func handle(id: String, type: String, payload: [String: Any], frame: WKFrameInfo, generation: Int) {
         switch type {
         case "hello":
-            Task { await NotificationManager.shared.pairingHello() }   // reopens notify after a finished unpair
+            Task { await NotificationManager.shared.pairingHello(generation: generation) }   // reopens notify only for a document newer than the unpair
             reply(re: id, ok: true, to: frame, generation: generation)
             send(type: "capabilities", payload: [
                 "bridge": Self.bridgeVersion, "shell": ShellConfig.shellVersion, "features": Self.features,
