@@ -91,12 +91,13 @@ jobs:
 
       - name: setup-local.sh refuses control characters and writes nothing (macOS bash)
         run: |
+          set +e   # the runner starts bash with -e; here a non-zero exit of setup-local.sh is the EXPECTED result
           set -uo pipefail
           rm -f Config/Local.xcconfig
           nl=$'\n'
           ok=1
           # each of these must exit 2 and must not create Config/Local.xcconfig
-          chk() { scripts/setup-local.sh "$@" >/dev/null 2>&1; rc=$?; if [ "$rc" -ne 2 ] || [ -e Config/Local.xcconfig ]; then echo "::error::setup-local.sh did not refuse (rc=$rc)"; ok=0; fi; rm -f Config/Local.xcconfig; }
+          chk() { rc=0; scripts/setup-local.sh "$@" >/dev/null 2>&1 || rc=$?; if [ "$rc" -ne 2 ] || [ -e Config/Local.xcconfig ]; then echo "::error::setup-local.sh did not refuse (rc=$rc)"; ok=0; fi; rm -f Config/Local.xcconfig; }
           chk --host "good.example${nl}EVE_BUNDLE_ID = evil.example" --bundle-id com.example.eve --team ABCDE12345
           chk --host good.example --bundle-id "com.example.eve${nl}DEVELOPMENT_TEAM = ZZZZZZZZZZ" --team ABCDE12345
           chk --host good.example --bundle-id com.example.eve --team "ABCDE12345${nl}X = 1"
