@@ -33,6 +33,10 @@ struct ShellView: View {
             if phase == .active {
                 NotificationManager.shared.clearDelivered()
                 Task { await SessionRevoker.shared.retryPending() }
+                // A restore that could not run at launch (Keychain locked) runs now; reload so the page sees the cookie.
+                Task { if await SessionPersistence.shared.onActive() { await model.reload() } }
+            } else {
+                Task { await SessionPersistence.shared.nudge() }   // safety net: copy the cookie before we may be suspended
             }
         }
         // Shell settings: three-finger long press opens the unpair dialog.

@@ -9,6 +9,7 @@ struct WebViewContainer: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .default()   // persistent store; session cookie lives here (HttpOnly)
+        SessionPersistence.shared.attach(to: config.websiteDataStore.httpCookieStore)   // keeps a Keychain copy of the cookie for reinstalls
         config.allowsInlineMediaPlayback = true
         let bridge = Bridge(config: ShellConfig.current)
         config.userContentController.add(WeakMessageHandler(bridge), name: Bridge.handlerName)
@@ -42,7 +43,12 @@ struct WebViewContainer: UIViewRepresentable {
         press.minimumPressDuration = 0.8
         webView.addGestureRecognizer(press)
 
-        webView.load(URLRequest(url: ShellConfig.current.startURL))
+        // An empty cookie store (fresh install of the same app ID) gets the backed-up session cookie back before the
+        // first load, so the pairing survives a reinstall. Nothing is restored over an existing cookie.
+        Task { @MainActor in
+            await SessionPersistence.shared.restoreIfNeeded()
+            webView.load(URLRequest(url: ShellConfig.current.startURL))
+        }
         return webView
     }
 
