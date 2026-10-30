@@ -69,6 +69,43 @@ jobs:
           echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
           rm xcodegen.zip
 
+      - name: Verify Config/Local.xcconfig overrides the committed defaults (resolved build settings)
+        run: |
+          set -euo pipefail
+          VER=$(sed -n 's/^EVE_SHELL_VERSION = //p' Config/Base.xcconfig)
+          BLD=$(sed -n 's/^EVE_BUILD_NUMBER = //p' Config/Base.xcconfig)
+          [ -n "$VER" ] && [ -n "$BLD" ] || { echo "::error::version or build number missing in Config/Base.xcconfig"; exit 1; }
+          grep -q "shellVersion = \"$VER\"" Eve/ShellConfig.swift || { echo "::error::ShellConfig.shellVersion differs from EVE_SHELL_VERSION ($VER)"; exit 1; }
+          # 1) fresh clone, no Local.xcconfig: placeholders (the optional include must not break anything)
+          rm -f Config/Local.xcconfig
+          scripts/check-config.sh PRODUCT_BUNDLE_IDENTIFIER=com.example.eve DEVELOPMENT_TEAM= EVE_HOST=eve.example.invalid \
+            MARKETING_VERSION="$VER" CURRENT_PROJECT_VERSION="$BLD"
+          # 2) Local.xcconfig with its own values: every one of them must reach the Eve target's build settings
+          printf '%s\n' 'EVE_HOST = override.example.invalid' 'EVE_BUNDLE_ID = ci.example.override' 'DEVELOPMENT_TEAM = ABCDE12345' > Config/Local.xcconfig
+          scripts/check-config.sh PRODUCT_BUNDLE_IDENTIFIER=ci.example.override DEVELOPMENT_TEAM=ABCDE12345 EVE_HOST=override.example.invalid \
+            MARKETING_VERSION="$VER" CURRENT_PROJECT_VERSION="$BLD"
+          # 3) Local.xcconfig may also set the final build setting directly: it still wins over the derived value
+          printf '%s\n' 'EVE_BUNDLE_ID = ci.example.ignored' 'PRODUCT_BUNDLE_IDENTIFIER = ci.example.direct' > Config/Local.xcconfig
+          scripts/check-config.sh PRODUCT_BUNDLE_IDENTIFIER=ci.example.direct
+          rm -f Config/Local.xcconfig
+
+      - name: setup-local.sh refuses control characters and writes nothing (macOS bash)
+        run: |
+          set +e   # the runner starts bash with -e; here a non-zero exit of setup-local.sh is the EXPECTED result
+          set -uo pipefail
+          rm -f Config/Local.xcconfig
+          nl=$'\n'
+          ok=1
+          # each of these must exit 2 and must not create Config/Local.xcconfig
+          chk() { rc=0; scripts/setup-local.sh "$@" >/dev/null 2>&1 || rc=$?; if [ "$rc" -ne 2 ] || [ -e Config/Local.xcconfig ]; then echo "::error::setup-local.sh did not refuse (rc=$rc)"; ok=0; fi; rm -f Config/Local.xcconfig; }
+          chk --host "good.example${nl}EVE_BUNDLE_ID = evil.example" --bundle-id com.example.eve --team ABCDE12345
+          chk --host good.example --bundle-id "com.example.eve${nl}DEVELOPMENT_TEAM = ZZZZZZZZZZ" --team ABCDE12345
+          chk --host good.example --bundle-id com.example.eve --team "ABCDE12345${nl}X = 1"
+          chk --host "good.example$(printf '\r')" --bundle-id com.example.eve --team ABCDE12345
+          chk --host "good.example$(printf '\t')" --bundle-id com.example.eve --team ABCDE12345
+          chk --host good.example --bundle-id com.example.eve --team abcde12345
+          [ "$ok" -eq 1 ]
+
       - name: Generate project (placeholder host, no real address)
         run: |
           cp Config/Local.xcconfig.example Config/Local.xcconfig

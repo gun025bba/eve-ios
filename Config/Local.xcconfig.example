@@ -1,5 +1,8 @@
-// Copy to Config/Local.xcconfig (gitignored) and fill in. Never commit the real file.
+// Copy to Config/Local.xcconfig (gitignored) and fill in, or let scripts/setup-local.sh write it for you.
+// Never commit the real file. Check what the build will actually use with scripts/check-config.sh.
 // Host only (no scheme, no port): the shell always uses https on port 443.
 EVE_HOST = your-host.example
+// Your own, fixed reverse-DNS ID. Changing it later installs a second app and forgets the pairing.
 EVE_BUNDLE_ID = com.example.eve
+// 10-character Apple team ID (not the number in the certificate name). setup-local.sh finds it for you.
 // DEVELOPMENT_TEAM = XXXXXXXXXX

@@ -2,7 +2,7 @@ import Foundation
 
 /// Build-time configuration. Only https on port 443 is ever allowed (no ATS exceptions).
 struct ShellConfig {
-    static let shellVersion = "0.2.2"
+    static let shellVersion = "0.3.0"
     static let bridgeVersion = "1.1.0"
 
     let host: String

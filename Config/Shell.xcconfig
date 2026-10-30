@@ -1,0 +1,14 @@
+// The one xcconfig the project uses (project.yml: project level AND the Eve target).
+// Order matters: in an xcconfig the LAST assignment wins, so Local.xcconfig is included last and overrides everything
+// above it, including the defaults in Base.xcconfig and the derived settings below.
+// `#include?` skips a missing Local.xcconfig silently (CI and fresh clones build with the placeholders); the path is
+// resolved relative to this file's directory (Config/).
+#include "Base.xcconfig"
+
+// Derived build settings. They live here, NOT in project.yml `settings`: a value in the target's own build settings
+// would sit above any xcconfig and could never be overridden by Local.xcconfig.
+PRODUCT_BUNDLE_IDENTIFIER = $(EVE_BUNDLE_ID)
+MARKETING_VERSION = $(EVE_SHELL_VERSION)
+CURRENT_PROJECT_VERSION = $(EVE_BUILD_NUMBER)
+
+#include? "Local.xcconfig"

@@ -3,19 +3,22 @@ options:
   deploymentTarget:
     iOS: "17.0"
   createIntermediateGroups: true
+# One xcconfig (Base defaults, derived settings, then the gitignored Local.xcconfig last) at project AND target level.
+# Do not put PRODUCT_BUNDLE_IDENTIFIER / MARKETING_VERSION / CURRENT_PROJECT_VERSION / DEVELOPMENT_TEAM into `settings`
+# below: target build settings win over any xcconfig and would silently ignore Config/Local.xcconfig.
 configFiles:
-  Debug: Config/Base.xcconfig
-  Release: Config/Base.xcconfig
+  Debug: Config/Shell.xcconfig
+  Release: Config/Shell.xcconfig
 targets:
   Eve:
     type: application
     platform: iOS
     sources: [Eve]
+    configFiles:
+      Debug: Config/Shell.xcconfig
+      Release: Config/Shell.xcconfig
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: $(EVE_BUNDLE_ID)
-        MARKETING_VERSION: $(EVE_SHELL_VERSION)
-        CURRENT_PROJECT_VERSION: $(EVE_BUILD_NUMBER)
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1"
         CODE_SIGN_STYLE: Automatic
@@ -46,6 +49,7 @@ targets:
       - Eve/RevokePolicy.swift
       - Eve/NotificationValidation.swift
       - Eve/NotificationScheduler.swift
+      - Eve/SessionBackupPolicy.swift
     settings:
       base:
         SWIFT_VERSION: "5.0"
