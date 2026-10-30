@@ -132,22 +132,27 @@ actor NotificationScheduler {
     /// Unpair step 1 (before the wipe): refuse new reminders and drop everything.
     /// `generation` is the current `Bridge.documentGeneration`; only a `hello` of a later document can reopen.
     /// A second unpair while still closed keeps the larger generation and forgets any remembered `hello`.
-    func closeAndCancelAll(generation: Int) async {
+    /// Returns the epoch this close created. The caller hands it to `finishUnpair(epoch:)` so that only the LAST
+    /// unpair can arm the reopen (L-8): the epoch is taken synchronously, before the first `await`.
+    @discardableResult
+    func closeAndCancelAll(generation: Int) async -> UInt64 {
         closed = true
         epoch &+= 1
+        let mine = epoch
         reopenArmed = false
         closedAtGeneration = max(closedAtGeneration, generation)
         pendingHelloGeneration = nil
         await cancelAll()
+        return mine
     }
 
     /// Unpair step 2 (after wipe + reload finished): drop whatever slipped in meanwhile and allow reopening.
-    /// If a `hello` of a newer document already arrived (before this point) the scheduler opens now.
-    /// If another unpair started while this one was cancelling, that newer unpair owns the state: do nothing.
-    func finishUnpair() async {
-        let myEpoch = epoch
+    /// `epoch` is the value `closeAndCancelAll` returned for THIS unpair. If another unpair closed the scheduler
+    /// after that (its wipe is still running), the newer unpair owns the state: this one only cancels again and
+    /// does not arm (L-8). If a `hello` of a newer document already arrived, the scheduler opens now.
+    func finishUnpair(epoch mine: UInt64) async {
         await cancelAll()
-        guard epoch == myEpoch else { return }
+        guard epoch == mine else { return }
         reopenArmed = true
         if let g = pendingHelloGeneration, g > closedAtGeneration { open() }
     }

@@ -28,9 +28,10 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
 
     /// Unpair step 1 (before the wipe): close the scheduler and cancel everything.
     /// `generation` = `Bridge.documentGeneration` now; only a later document's `hello` can reopen.
-    func closeForUnpair(generation: Int) async { await scheduler.closeAndCancelAll(generation: generation) }
+    /// Returns the epoch of this unpair; pass it to `finishUnpair(epoch:)` (only the last unpair may arm the reopen).
+    func closeForUnpair(generation: Int) async -> UInt64 { await scheduler.closeAndCancelAll(generation: generation) }
     /// Unpair step 2 (after wipe + reload): cancel once more; a newer document's `hello` (before or after) reopens.
-    func finishUnpair() async { await scheduler.finishUnpair() }
+    func finishUnpair(epoch: UInt64) async { await scheduler.finishUnpair(epoch: epoch) }
     /// Bridge `hello`, with the generation of the document that sent it.
     func pairingHello(generation: Int) async { await scheduler.pairingHello(generation: generation) }
 

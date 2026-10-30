@@ -38,6 +38,7 @@ actor FakeCenter: NotificationCentering {
         for c in w { c.resume() }
     }
     func markDelivered(_ id: String) { delivered.insert(id) }
+    func markScheduledForTest(_ id: String) { scheduled[id] = 0 }
 
     func authorizationStatus() async -> NotifyAuthStatus { status }
     func requestAuthorization() async {
@@ -160,7 +161,7 @@ final class NotificationSchedulerTests: XCTestCase {
         let center = FakeCenter()
         let s = make(center)
         _ = await s.schedule(id: "a", afterSec: 30)
-        await s.closeAndCancelAll(generation: 1)
+        let e1 = await s.closeAndCancelAll(generation: 1)
         var sched = await center.scheduled
         XCTAssertTrue(sched.isEmpty)
         let closedNow = await s.isClosed
@@ -172,7 +173,7 @@ final class NotificationSchedulerTests: XCTestCase {
         let stillClosed = await s.isClosed
         XCTAssertTrue(stillClosed)
 
-        await s.finishUnpair()
+        await s.finishUnpair(epoch: e1)
         // L-6: the newer document's hello arrived before the wipe finished, so finishing opens it right away.
         let reopened = await s.isClosed
         XCTAssertFalse(reopened)
@@ -185,10 +186,10 @@ final class NotificationSchedulerTests: XCTestCase {
     func testFinishUnpairRemovesReminderThatSlippedIn() async {
         let center = FakeCenter()
         let s = make(center)
-        await s.closeAndCancelAll(generation: 1)
+        let e1 = await s.closeAndCancelAll(generation: 1)
         // Something got into the system list anyway (e.g. an add in flight across the close).
         await center.setSeed([PendingNotification(identifier: NotifyValidation.idPrefix + "late", fireDate: nil)])
-        await s.finishUnpair()
+        await s.finishUnpair(epoch: e1)
         let sched = await center.scheduled
         XCTAssertTrue(sched.isEmpty)
     }
@@ -246,8 +247,8 @@ final class NotificationSchedulerTests: XCTestCase {
     /// The page that was current when the unpair started (or an older one) must never reopen the scheduler.
     func testHelloOfOldOrSameDocumentNeverReopens() async {
         let s = make(FakeCenter())
-        await s.closeAndCancelAll(generation: 5)
-        await s.finishUnpair()                       // armed
+        let e1 = await s.closeAndCancelAll(generation: 5)
+        await s.finishUnpair(epoch: e1)                       // armed
         for g in [0, 3, 5] {
             await s.pairingHello(generation: g)
             let c = await s.isClosed
@@ -261,10 +262,10 @@ final class NotificationSchedulerTests: XCTestCase {
     /// Armed, but the hello comes from the old document: nothing is remembered for later either.
     func testOldHelloBeforeArmedIsNotRemembered() async {
         let s = make(FakeCenter())
-        await s.closeAndCancelAll(generation: 5)
+        let e1 = await s.closeAndCancelAll(generation: 5)
         await s.pairingHello(generation: 5)
         await s.pairingHello(generation: 4)
-        await s.finishUnpair()
+        await s.finishUnpair(epoch: e1)
         let c = await s.isClosed
         XCTAssertTrue(c)
     }
@@ -272,11 +273,11 @@ final class NotificationSchedulerTests: XCTestCase {
     /// A newer document's hello that arrives before `finishUnpair` is recorded and opens in `finishUnpair`.
     func testNewerHelloBeforeFinishIsRecordedAndOpensAtFinish() async {
         let s = make(FakeCenter())
-        await s.closeAndCancelAll(generation: 5)
+        let e1 = await s.closeAndCancelAll(generation: 5)
         await s.pairingHello(generation: 6)
         let before = await s.isClosed
         XCTAssertTrue(before)                        // not armed yet
-        await s.finishUnpair()
+        await s.finishUnpair(epoch: e1)
         let after = await s.isClosed
         XCTAssertFalse(after)
         let r = await s.schedule(id: "a", afterSec: 30)
@@ -286,8 +287,8 @@ final class NotificationSchedulerTests: XCTestCase {
     /// A newer document that has not said hello yet: finishing alone does not open.
     func testFinishWithoutHelloStaysClosedUntilNewerHello() async {
         let s = make(FakeCenter())
-        await s.closeAndCancelAll(generation: 5)
-        await s.finishUnpair()
+        let e1 = await s.closeAndCancelAll(generation: 5)
+        await s.finishUnpair(epoch: e1)
         let c = await s.isClosed
         XCTAssertTrue(c)
         await s.pairingHello(generation: 6)
@@ -298,10 +299,10 @@ final class NotificationSchedulerTests: XCTestCase {
     /// Opening is one-shot: a later close at a higher generation needs a still newer document.
     func testSecondUnpairNeedsAnotherNewerDocument() async {
         let s = make(FakeCenter())
-        await s.closeAndCancelAll(generation: 5)
+        _ = await s.closeAndCancelAll(generation: 5)
         await s.pairingHello(generation: 6)          // remembered
-        await s.closeAndCancelAll(generation: 7)     // second unpair before the first finished: remembered hello is dropped
-        await s.finishUnpair()
+        let e2 = await s.closeAndCancelAll(generation: 7)     // second unpair before the first finished: remembered hello is dropped
+        await s.finishUnpair(epoch: e2)
         var c = await s.isClosed
         XCTAssertTrue(c)
         await s.pairingHello(generation: 6)
@@ -316,9 +317,9 @@ final class NotificationSchedulerTests: XCTestCase {
     /// A close at a lower generation never lowers the bar of an earlier close.
     func testCloseKeepsLargestGeneration() async {
         let s = make(FakeCenter())
-        await s.closeAndCancelAll(generation: 9)
-        await s.closeAndCancelAll(generation: 2)
-        await s.finishUnpair()
+        _ = await s.closeAndCancelAll(generation: 9)
+        let e2 = await s.closeAndCancelAll(generation: 2)
+        await s.finishUnpair(epoch: e2)
         await s.pairingHello(generation: 5)
         let c = await s.isClosed
         XCTAssertTrue(c)
@@ -340,19 +341,106 @@ final class NotificationSchedulerTests: XCTestCase {
     func testFinishOverlappedByNewCloseDoesNotArm() async {
         let center = FakeCenter()
         let s = make(center)
-        await s.closeAndCancelAll(generation: 5)
+        let e1 = await s.closeAndCancelAll(generation: 5)
         await center.setHoldPending(true)
         let base = await center.pendingStarted
-        let first = Task { await s.finishUnpair() }
+        let first = Task { await s.finishUnpair(epoch: e1) }
         while await center.pendingStarted <= base { await Task.yield() }   // first finish is inside cancelAll
         await center.setHoldPending(false)
-        await s.closeAndCancelAll(generation: 6)                       // second unpair overlaps
+        let e2 = await s.closeAndCancelAll(generation: 6)                       // second unpair overlaps
         await center.releasePending()
         await first.value
         await s.pairingHello(generation: 7)                            // newer than both, but nothing is armed
         let c = await s.isClosed
         XCTAssertTrue(c)
-        await s.finishUnpair()                                         // the second unpair finishes: remembered hello opens
+        await s.finishUnpair(epoch: e2)                                         // the second unpair finishes: remembered hello opens
+        let o = await s.isClosed
+        XCTAssertFalse(o)
+    }
+
+    // MARK: L-8 overlapping unpairs: only the last one arms the reopen
+
+    /// A closes (g5), B closes (g6) while A's wipe is still running, A's `finishUnpair` starts only afterwards.
+    /// A is stale (epoch of A != current epoch): it must not arm, so a newer document's hello stays closed until B finishes.
+    func testFirstFinishAfterSecondCloseDoesNotArm() async {
+        let s = make(FakeCenter())
+        let a = await s.closeAndCancelAll(generation: 5)
+        let b = await s.closeAndCancelAll(generation: 6)
+        XCTAssertNotEqual(a, b)
+        await s.finishUnpair(epoch: a)                 // stale: B owns the state
+        await s.pairingHello(generation: 7)            // newer than both, but nothing is armed
+        let c = await s.isClosed
+        XCTAssertTrue(c)
+        await s.finishUnpair(epoch: b)                 // B finishes: the remembered hello opens
+        let o = await s.isClosed
+        XCTAssertFalse(o)
+    }
+
+    /// B finishes first, A's late finish must neither re-close nor change anything.
+    func testStaleFinishAfterLastFinishIsHarmless() async {
+        let s = make(FakeCenter())
+        let a = await s.closeAndCancelAll(generation: 5)
+        let b = await s.closeAndCancelAll(generation: 6)
+        await s.finishUnpair(epoch: b)                 // armed
+        await s.finishUnpair(epoch: a)                 // stale, late
+        await s.pairingHello(generation: 6)            // same document as B's close: no
+        let c = await s.isClosed
+        XCTAssertTrue(c)
+        await s.pairingHello(generation: 7)            // armed by B: opens
+        let o = await s.isClosed
+        XCTAssertFalse(o)
+    }
+
+    /// A stale finish still cancels again (it is harmless and keeps the "drop what slipped in" guarantee).
+    func testStaleFinishStillCancelsEverything() async {
+        let center = FakeCenter()
+        let s = make(center)
+        let a = await s.closeAndCancelAll(generation: 1)
+        _ = await s.closeAndCancelAll(generation: 2)
+        await center.markScheduledForTest("eve.notify.x")
+        await s.finishUnpair(epoch: a)
+        let sched = await center.scheduled
+        XCTAssertTrue(sched.isEmpty)
+        let c = await s.isClosed
+        XCTAssertTrue(c)
+    }
+
+    /// Three unpairs in a row: only the epoch of the last close arms.
+    func testOnlyLastOfThreeUnpairsArms() async {
+        let s = make(FakeCenter())
+        let a = await s.closeAndCancelAll(generation: 1)
+        let b = await s.closeAndCancelAll(generation: 2)
+        let c = await s.closeAndCancelAll(generation: 3)
+        await s.finishUnpair(epoch: b)
+        await s.finishUnpair(epoch: a)
+        await s.pairingHello(generation: 4)
+        let stillClosed = await s.isClosed
+        XCTAssertTrue(stillClosed)
+        await s.finishUnpair(epoch: c)
+        let open = await s.isClosed
+        XCTAssertFalse(open)
+    }
+
+    /// Two unpairs that really overlap in time (the first wipe is slow): the first finish arriving after the second
+    /// close must not arm even when the first close itself was still cancelling when the second started.
+    func testSecondCloseDuringFirstCloseCancelling() async {
+        let center = FakeCenter()
+        let s = make(center)
+        await s.cancel(id: "warm")                                         // seed first, so the gate below hits cancelAll's own `pending()`
+        await center.setHoldPending(true)
+        let base = await center.pendingStarted
+        let first = Task { await s.closeAndCancelAll(generation: 5) }
+        while await center.pendingStarted <= base { await Task.yield() }   // first close is inside cancelAll
+        await center.setHoldPending(false)
+        let b = await s.closeAndCancelAll(generation: 6)                   // second unpair starts meanwhile
+        await center.releasePending()
+        let a = await first.value
+        XCTAssertNotEqual(a, b)
+        await s.finishUnpair(epoch: a)
+        await s.pairingHello(generation: 7)
+        let c = await s.isClosed
+        XCTAssertTrue(c)
+        await s.finishUnpair(epoch: b)
         let o = await s.isClosed
         XCTAssertFalse(o)
     }
@@ -370,7 +458,7 @@ final class NotificationSchedulerTests: XCTestCase {
         let s = make(center)
         let inFlight = Task { await s.schedule(id: "a", afterSec: 30) }
         await waitForAddStarted(center)
-        await s.closeAndCancelAll(generation: 1)
+        let e1 = await s.closeAndCancelAll(generation: 1)
         await center.releaseAdd()
         let r = await inFlight.value
         XCTAssertEqual(r, .failed)
@@ -378,7 +466,7 @@ final class NotificationSchedulerTests: XCTestCase {
         XCTAssertTrue(sched.isEmpty)
         let n = await s.acceptedCount
         XCTAssertEqual(n, 0)
-        await s.finishUnpair()
+        await s.finishUnpair(epoch: e1)
         let sched2 = await center.scheduled
         XCTAssertTrue(sched2.isEmpty)
     }
