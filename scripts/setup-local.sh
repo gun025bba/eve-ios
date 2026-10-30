@@ -40,10 +40,25 @@ while [ $# -gt 0 ]; do
 done
 
 [ -n "$HOST" ] && [ -n "$BUNDLE" ] || { echo "--host and --bundle-id are required (see --help)" >&2; exit 2; }
-printf '%s' "$HOST" | grep -Eq '^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$' \
-  || { echo "--host must be a bare host name (no scheme, port or path)" >&2; exit 2; }
-printf '%s' "$BUNDLE" | grep -Eq '^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$' && printf '%s' "$BUNDLE" | grep -q '\.' \
-  || { echo "--bundle-id must look like com.yourname.eve" >&2; exit 2; }
+
+# Values go into an xcconfig, where a line break starts a new setting. Refuse anything that is not plain printable
+# ASCII (newline, CR, tab, other control characters, non-ASCII) BEFORE any pattern check: `grep -E '^...$'` would
+# accept "good.example<newline>EVE_X = y" because one of its lines matches, so the patterns below use [[ =~ ]], which
+# matches the whole value.
+check_plain() {   # name value
+  local LC_ALL=C
+  if [[ "$2" == *[^[:print:]]* ]]; then
+    echo "$1 contains a control or non-ASCII character (newline, tab, ...); refused" >&2
+    exit 2
+  fi
+}
+check_plain --host "$HOST"
+check_plain --bundle-id "$BUNDLE"
+[ -z "$TEAM" ] || check_plain --team "$TEAM"
+
+host_re='^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$'
+[[ "$HOST" =~ $host_re ]] || { echo "--host must be a bare host name (no scheme, port or path)" >&2; exit 2; }
+[[ "$BUNDLE" =~ $host_re && "$BUNDLE" == *.* ]] || { echo "--bundle-id must look like com.yourname.eve" >&2; exit 2; }
 
 if [ -z "$TEAM" ]; then
   TEAMS="$(detect_teams)"
@@ -53,7 +68,8 @@ if [ -z "$TEAM" ]; then
     *) echo "Several teams found; pass --team with one of:" >&2; printf '%s\n' "$TEAMS" >&2; exit 2 ;;
   esac
 fi
-printf '%s' "$TEAM" | grep -Eq '^[A-Z0-9]{10}$' || { echo "--team must be 10 characters (A-Z, 0-9)" >&2; exit 2; }
+team_re='^[A-Z0-9]{10}$'
+[[ "$TEAM" =~ $team_re ]] || { echo "--team must be 10 characters (A-Z, 0-9)" >&2; exit 2; }
 
 if [ -e Config/Local.xcconfig ] && [ "$FORCE" -ne 1 ]; then
   echo "Config/Local.xcconfig already exists; use --force to overwrite it." >&2

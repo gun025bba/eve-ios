@@ -20,10 +20,13 @@ enum SessionBackup {
 
     // MARK: Token
 
-    /// Server tokens are base64url of 32 random bytes (43 chars). Anything else is refused, so a value can never
-    /// carry cookie attributes or control characters when it is put back into a cookie.
+    /// The gateway's token is `base64.RawURLEncoding` of 32 random bytes = exactly 43 characters (eve-serving
+    /// internal/session/session.go). Anything else is refused, so a value can never carry cookie attributes or control
+    /// characters when it is put back into a cookie, and a bogus value is never stored.
+    static let tokenLength = 43
+
     static func isValidToken(_ s: String) -> Bool {
-        guard (16...128).contains(s.utf8.count) else { return false }
+        guard s.utf8.count == tokenLength else { return false }
         return s.utf8.allSatisfy { b in
             (b >= 0x30 && b <= 0x39) || (b >= 0x41 && b <= 0x5A) || (b >= 0x61 && b <= 0x7A) || b == 0x2D || b == 0x5F
         }
@@ -59,14 +62,54 @@ enum SessionBackup {
 
     // MARK: Cookie <-> record
 
-    /// The session cookie of the configured host: exact name, Secure, exact host (a leading dot is ignored, as in
-    /// `SessionRevoker`), a valid value. Nothing else is ever stored.
+    /// The session cookie of the configured host, exactly as the gateway sets it: name, Secure, HttpOnly, Path=/,
+    /// host-only (domain is exactly the host: no leading dot, so no Domain attribute), a valid value. A cookie that
+    /// differs in any of these (e.g. a domain cookie ".host", or one a page script could read) is never backed up and
+    /// never counts as "the cookie is there". (Unpair uses the more tolerant `SessionRevoker.currentSessionToken`.)
     static func sessionCookie(in cookies: [HTTPCookie], host: String) -> HTTPCookie? {
+        cookies.first { c in
+            c.name == cookieName && isValidToken(c.value) && attributeMismatches(of: c, host: host).isEmpty
+        }
+    }
+
+    // MARK: Read-back check after a restore (M-1)
+
+    enum Mismatch: String, Equatable, Hashable { case notHttpOnly, notSecure, notHostOnly, wrongPath }
+
+    /// Attributes that must be what the gateway sets: HttpOnly, Secure, host-only (domain exactly the host, no
+    /// leading dot), Path "/". Empty = as expected.
+    static func attributeMismatches(of c: HTTPCookie, host: String) -> [Mismatch] {
+        var m: [Mismatch] = []
+        if !c.isHTTPOnly { m.append(.notHttpOnly) }
+        if !c.isSecure { m.append(.notSecure) }
+        if c.domain.lowercased() != host.lowercased() { m.append(.notHostOnly) }
+        if c.path != "/" { m.append(.wrongPath) }
+        return m
+    }
+
+    enum RestoreCheck: Equatable {
+        case ok
+        case missing                    // setCookie left nothing for this token on the host
+        case mismatch([Mismatch])       // it is there but not as the server's cookie: the caller must remove it
+    }
+
+    /// Looks at what the WKHTTPCookieStore really holds after `setCookie` of the restored `token`. Every
+    /// `eve_session` cookie of the host (domain with or without a leading dot) carrying that token must match.
+    static func checkRestored(token: String, in cookies: [HTTPCookie], host: String) -> RestoreCheck {
+        let mine = cookiesToRemove(token: token, in: cookies, host: host)
+        if mine.isEmpty { return .missing }
+        var bad: [Mismatch] = []
+        for c in mine { for m in attributeMismatches(of: c, host: host) where !bad.contains(m) { bad.append(m) } }
+        return bad.isEmpty ? .ok : .mismatch(bad)
+    }
+
+    /// The cookies the guard removes when a restore does not read back as expected: same name, value and host
+    /// (any leading dot) as the restored token.
+    static func cookiesToRemove(token: String, in cookies: [HTTPCookie], host: String) -> [HTTPCookie] {
         let h = host.lowercased()
-        return cookies.first { c in
-            c.name == cookieName && c.isSecure
+        return cookies.filter { c in
+            c.name == cookieName && c.value == token
                 && c.domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased() == h
-                && isValidToken(c.value)
         }
     }
 
@@ -112,23 +155,36 @@ enum SessionBackup {
         case none
         case retryLater        // the Keychain (or the pending-revoke list) could not be read yet
         case deleteBackup
+        case discardAndRevoke(Record)   // the pending-revoke list is damaged: do not restore, delete the backup, revoke its token
         case restore(Record)
+    }
+
+    /// The pending-revoke list as last read.
+    enum PendingRevoke: Equatable {
+        case tokens(Set<String>)
+        case unavailable       // could not be read right now (locked): decide nothing
+        case corrupt           // damaged: it may hide a token that must not come back, so fail closed
     }
 
     /// At launch, before the first page load. Restores only into an EMPTY cookie store (a cookie that is already
     /// there is never replaced), and never a token that is waiting to be revoked or that is expired / from the future.
-    /// `pendingRevokeTokens` nil = that list could not be read yet.
-    static func onLaunch(cookie: HTTPCookie?, stored: Stored, pendingRevokeTokens: Set<String>?, now: TimeInterval) -> RestoreAction {
+    /// `deletePending` = an earlier delete of the backup failed (web logout/expiry): it is retried first and the
+    /// record is never restored. A damaged pending-revoke list fails closed (nothing is restored).
+    static func onLaunch(cookie: HTTPCookie?, stored: Stored, pendingRevoke: PendingRevoke, deletePending: Bool = false,
+                         now: TimeInterval) -> RestoreAction {
         if cookie != nil { return .none }
+        if deletePending { return stored == .unavailable ? .retryLater : .deleteBackup }
         switch stored {
         case .none: return .none
         case .unavailable: return .retryLater
         case .corrupt: return .deleteBackup
         case .record(let r):
             guard freshness(r, now: now) == .fresh else { return .deleteBackup }
-            guard let pending = pendingRevokeTokens else { return .retryLater }
-            if pending.contains(r.token) { return .deleteBackup }
-            return .restore(r)
+            switch pendingRevoke {
+            case .unavailable: return .retryLater
+            case .corrupt: return .discardAndRevoke(r)
+            case .tokens(let pending): return pending.contains(r.token) ? .deleteBackup : .restore(r)
+            }
         }
     }
 
@@ -141,9 +197,11 @@ enum SessionBackup {
     /// After the cookie store changed (or on a lifecycle nudge). `seenPresent` = this process has seen (or restored)
     /// the cookie, so its absence now means logout/expiry/unpair, not "the store was empty at launch".
     /// `suspended` = an unpair is in progress: do nothing (the unpair itself deletes the backup).
-    static func onCookiesChanged(cookie: HTTPCookie?, stored: Stored, seenPresent: Bool, suspended: Bool, now: TimeInterval) -> ObserveAction {
+    /// `deletePending` = an earlier delete failed: with no cookie it is retried, even in a new process (`seenPresent` false).
+    static func onCookiesChanged(cookie: HTTPCookie?, stored: Stored, seenPresent: Bool, suspended: Bool,
+                                 deletePending: Bool = false, now: TimeInterval) -> ObserveAction {
         if suspended { return .none }
-        guard let cookie else { return seenPresent ? .delete : .none }
+        guard let cookie else { return (seenPresent || deletePending) ? .delete : .none }
         var existing: Record?
         switch stored {
         case .unavailable: return .none               // cannot read or write now; the next change/nudge retries

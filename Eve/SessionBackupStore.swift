@@ -4,7 +4,8 @@ import Security
 /// Keychain item holding the backup of the session cookie (see `SessionBackup` for the record and the rules).
 ///
 /// - Own item (service `eve.shell.session-backup`), separate from the pending-revoke item.
-/// - `ThisDeviceOnly`: never synced to iCloud Keychain, never in backups, not restored to another device;
+/// - `ThisDeviceOnly`: never synced to iCloud Keychain; it can be in an encrypted backup of THIS device but is never
+///   restored onto another device;
 ///   `kSecAttrSynchronizable` is explicitly false.
 /// - Accessible only while the device is unlocked, like the pending-revoke item (the shell never needs it in the
 ///   background). Change `accessible` in this one place to loosen it.

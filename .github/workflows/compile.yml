@@ -89,6 +89,22 @@ jobs:
           scripts/check-config.sh PRODUCT_BUNDLE_IDENTIFIER=ci.example.direct
           rm -f Config/Local.xcconfig
 
+      - name: setup-local.sh refuses control characters and writes nothing (macOS bash)
+        run: |
+          set -uo pipefail
+          rm -f Config/Local.xcconfig
+          nl=$'\n'
+          ok=1
+          # each of these must exit 2 and must not create Config/Local.xcconfig
+          chk() { scripts/setup-local.sh "$@" >/dev/null 2>&1; rc=$?; if [ "$rc" -ne 2 ] || [ -e Config/Local.xcconfig ]; then echo "::error::setup-local.sh did not refuse (rc=$rc)"; ok=0; fi; rm -f Config/Local.xcconfig; }
+          chk --host "good.example${nl}EVE_BUNDLE_ID = evil.example" --bundle-id com.example.eve --team ABCDE12345
+          chk --host good.example --bundle-id "com.example.eve${nl}DEVELOPMENT_TEAM = ZZZZZZZZZZ" --team ABCDE12345
+          chk --host good.example --bundle-id com.example.eve --team "ABCDE12345${nl}X = 1"
+          chk --host "good.example$(printf '\r')" --bundle-id com.example.eve --team ABCDE12345
+          chk --host "good.example$(printf '\t')" --bundle-id com.example.eve --team ABCDE12345
+          chk --host good.example --bundle-id com.example.eve --team abcde12345
+          [ "$ok" -eq 1 ]
+
       - name: Generate project (placeholder host, no real address)
         run: |
           cp Config/Local.xcconfig.example Config/Local.xcconfig
