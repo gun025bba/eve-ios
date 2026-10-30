@@ -1,5 +1,11 @@
 # Changelog
 
+## shell-v0.2.3
+Follow-up Low L-8 of the PR #16 security review. Patch release: no bridge change (stays v1.1.0), no change for the web.
+- L-8: when a second unpair started while the first one was still wiping, the first `finishUnpair` read the (already newer) epoch on entry and armed the reopen, so a newer document's `hello` could reopen notify before the second wipe had finished. `closeAndCancelAll` now returns the epoch it created (taken before its first `await`), `ShellModel.wipeAndRevoke` hands it to `finishUnpair(epoch:)`, and only the unpair whose epoch is still the latest arms the reopen (a stale finish still cancels once more, harmlessly). Only the last of several overlapping unpairs opens the reopen window.
+- Tests (`EveLogicTests`): first finish after the second close does not arm, stale finish after the last finish is harmless, a stale finish still cancels everything, only the last of three unpairs arms, second close during the first close's cancelling. Existing tests now pass the epoch.
+- Build number 7.
+
 ## shell-v0.2.2
 Follow-up Lows L-6 / L-7 of the PR #11 security review (issue #12). Patch release: no new bridge message, bridge stays v1.1.0.
 - L-6: the notify scheduler reopens only for a document newer than the one that was current when the unpair started. The scheduler is closed at the current `Bridge.documentGeneration` G; a `hello` reopens it only if its generation is > G, so a `hello` of the old document (or an older one) can never do it. A newer document's `hello` that arrives before the wipe has finished is remembered and honoured in `finishUnpair`; one that arrives afterwards reopens right away. A second unpair that starts while the first one is still finishing keeps the larger generation, drops a remembered `hello`, and the first `finishUnpair` no longer arms the reopen.

@@ -24,7 +24,7 @@ final class ShellModel: ObservableObject {
     /// 1) copy the session cookie into the Keychain as a pending revoke, 2) wipe all website data now (no waiting),
     /// 3) reload, 4) try the revoke; if it fails it is retried on launch, foreground and when the network returns.
     func wipeAndRevoke() async {
-        await NotificationManager.shared.closeForUnpair(generation: bridge?.documentGeneration ?? 0)   // refuse new reminders, drop all pending ones; only a later document's hello reopens
+        let unpairEpoch = await NotificationManager.shared.closeForUnpair(generation: bridge?.documentGeneration ?? 0)   // refuse new reminders, drop all pending ones; only a later document's hello reopens
         let store = WKWebsiteDataStore.default()
         let revoker = SessionRevoker.shared
         let token = await revoker.currentSessionToken(from: store.httpCookieStore)
@@ -32,7 +32,7 @@ final class ShellModel: ObservableObject {
         if let token { persisted = revoker.persistPending(token) }
         await store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast)
         reload()
-        await NotificationManager.shared.finishUnpair()   // once more after wipe+reload; the next pairing's hello (newer document) reopens
+        await NotificationManager.shared.finishUnpair(epoch: unpairEpoch)   // once more after wipe+reload; only the last overlapping unpair arms; the next pairing's hello (newer document) reopens
         if let token { await revoker.revoke(token: token, persisted: persisted) }
     }
 }
